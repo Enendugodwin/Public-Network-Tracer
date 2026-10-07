@@ -218,12 +218,20 @@ form.addEventListener("submit", async (event) => {
   button.querySelector("span").textContent = "Checking…";
   status.classList.remove("error");
   try {
-    const response = await fetch(`${API_BASE}/api/lookup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target: input.value }),
-    });
-    const data = await response.json();
+    let response;
+    try {
+      response = await fetch(`${API_BASE}/api/lookup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: input.value }),
+      });
+    } catch {
+      throw new Error("Could not reach the lookup API. Check TRACER_API_BASE and the Worker's ALLOWED_ORIGIN.");
+    }
+    const data = await response.json().catch(() => null);
+    if (!data) {
+      throw new Error(`No lookup API at ${API_BASE || location.origin}. Deploy the Worker and set TRACER_API_BASE in config.js to its URL.`);
+    }
     if (!response.ok) throw new Error(data.error || "Lookup failed. Try again.");
     render(data);
     status.classList.add("success");
