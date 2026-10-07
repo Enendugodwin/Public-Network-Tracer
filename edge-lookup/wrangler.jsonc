@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "osint-edge-lookup",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "vars": {
+    "EXTRA_PORTS": ""
+  }
+}

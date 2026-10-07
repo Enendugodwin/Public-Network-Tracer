@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <meta name="description" content="A stateless, source-linked lookup for public internet infrastructure." />
+    <title>Signal — Internet lookup</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Signal home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M16 3.5 27 8v7.2c0 6.2-4.2 10.6-11 13.3C9.2 25.8 5 21.4 5 15.2V8l11-4.5Z" stroke="currentColor" stroke-width="1.8"/><path d="m10.5 16 3.4 3.4 7.8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span>signal<span class="brand-dot">.</span></span>
+      </a>
+      <div class="topbar-meta"><span class="status-indicator" aria-hidden="true"></span> Stateless lookup <span class="meta-divider">·</span> No search history</div>
+    </header>
+
+    <main class="shell">
+      <section class="intro" aria-labelledby="page-title">
+        <div class="eyebrow"><span class="eyebrow-line"></span> PUBLIC INTERNET INTELLIGENCE</div>
+        <h1 id="page-title">One lookup.<br /><span>A clearer view of the internet.</span></h1>
+        <p class="intro-copy">Check a public IP, domain, or URL. See current HTTP behavior alongside cited DNS, registration, and network data.</p>
+
+        <form id="lookupForm" class="search-form">
+          <label class="sr-only" for="targetInput">IP address, domain, or URL</label>
+          <span class="search-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="10.8" cy="10.8" r="6.3" stroke="currentColor" stroke-width="1.8"/><path d="m15.5 15.5 4.2 4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </span>
+          <input id="targetInput" name="target" type="search" maxlength="2048" placeholder="IP address, domain, or URL" autocomplete="url" spellcheck="false" required />
+          <button id="checkButton" class="check-button" type="submit">
+            <span>Check target</span>
+            <svg aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </form>
+        <div class="search-extras">
+          <div class="examples" aria-label="Example targets">
+            <span>Try:</span>
+            <button type="button" class="example-chip" data-target="8.8.8.8">8.8.8.8</button>
+            <button type="button" class="example-chip" data-target="example.com">example.com</button>
+          </div>
+          <p class="search-hint">One request · public data only · no saved results</p>
+        </div>
+        <p id="formStatus" class="form-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="results" class="results" hidden aria-labelledby="results-heading">
+        <div class="results-heading-row">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span> LOOKUP RESULT</div>
+            <h2 id="results-heading" class="result-target" tabindex="-1">—</h2>
+            <div id="routeLine" class="route-line">
+              <span class="route-chip">
+                <span class="route-label">Your IP</span>
+                <span id="routeSource" class="route-value mono">—</span>
+              </span>
+              <span class="route-arrow" aria-hidden="true">
+                <svg viewBox="0 0 24 12" fill="none"><path d="M0 6h19m-4.5-4.5L19 6l-4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="route-chip">
+                <span class="route-label">Destination</span>
+                <span id="routeDestination" class="route-value mono">—</span>
+              </span>
+            </div>
+          </div>
+          <p id="checkedAt" class="checked-at"></p>
+        </div>
+
+        <div id="diagnosis" class="diagnosis" hidden>
+          <div class="diagnosis-head">
+            <span id="diagnosisBadge" class="diagnosis-badge">—</span>
+            <strong id="diagnosisTitle">—</strong>
+          </div>
+          <p id="diagnosisSummary" class="diagnosis-summary"></p>
+          <div id="diagnosisEvidence" class="token-list diagnosis-evidence"></div>
+        </div>
+
+        <div class="overview-grid" aria-label="Overview">
+          <article class="metric-card metric-primary"><span class="metric-label">HTTP STATUS</span><strong id="metricStatus">—</strong><span class="metric-note" id="metricHttpNote">Live check</span></article>
+          <article class="metric-card"><span class="metric-label">RESOLVED IP</span><strong id="metricIp" class="mono">—</strong><span class="metric-note">Public address</span></article>
+          <article class="metric-card"><span class="metric-label">ASN</span><strong id="metricAsn" class="mono">—</strong><span class="metric-note" id="metricOrg">Network</span></article>
+          <article class="metric-card"><span class="metric-label">RESPONSE</span><strong id="metricTime">—</strong><span class="metric-note">Round trip</span></article>
+        </div>
+
+        <div class="detail-grid">
+          <section class="panel" aria-labelledby="http-heading">
+            <div class="panel-heading"><span class="panel-icon http-icon" aria-hidden="true">01</span><div><h3 id="http-heading">HTTP details</h3><p>Live response from the target</p></div><span id="httpState" class="panel-state">—</span></div>
+            <div id="httpNotice" class="notice" hidden></div>
+            <dl class="detail-list">
+              <div><dt>Status code</dt><dd id="httpStatus">—</dd></div>
+              <div><dt>Response time</dt><dd id="httpTime">—</dd></div>
+              <div><dt>Content length</dt><dd id="httpLength">—</dd></div>
+              <div><dt>Server</dt><dd id="httpServer">—</dd></div>
+              <div><dt>TLS</dt><dd id="httpTls">—</dd></div>
+              <div><dt>Redirect</dt><dd id="httpRedirect">—</dd></div>
+            </dl>
+            <div class="subsection"><h4>Selected response headers</h4><div id="httpHeaders" class="token-list"><span class="muted">No response headers</span></div></div>
+            <div class="subsection"><h4>TCP reachability</h4><div id="tcpChecks" class="token-list"><span class="muted">No TCP checks run</span></div><p id="tcpNote" class="micro-note"></p></div>
+          </section>
+
+          <section class="panel" aria-labelledby="network-heading">
+            <div class="panel-heading"><span class="panel-icon network-icon" aria-hidden="true">02</span><div><h3 id="network-heading">Network details</h3><p>Public records and observations</p></div></div>
+            <dl class="detail-list">
+              <div><dt>IP address</dt><dd id="networkIp" class="mono">—</dd></div>
+              <div><dt>ASN</dt><dd id="networkAsn" class="mono">—</dd></div>
+              <div><dt>Organization</dt><dd id="networkOrg">—</dd></div>
+              <div><dt>Country</dt><dd id="networkCountry">—</dd></div>
+              <div><dt>Network range</dt><dd id="networkRange" class="mono">—</dd></div>
+              <div><dt>Network name</dt><dd id="networkName">—</dd></div>
+            </dl>
+            <div class="subsection"><h4>DNS records</h4><div id="dnsRecords" class="token-list"><span class="muted">No public records returned</span></div><p id="dnsNote" class="micro-note"></p></div>
+            <div class="subsection"><h4>Observed ports</h4><div id="portRecords" class="token-list"><span class="muted">Not available</span></div><p id="portNote" class="micro-note"></p></div>
+            <div class="subsection"><h4>Observed services</h4><div id="serviceRecords" class="token-list"><span class="muted">No service details available</span></div></div>
+            <div class="subsection"><h4>Certificates</h4><div id="certificateRecords" class="token-list"><span class="muted">No certificate observations available</span></div></div>
+            <div id="domainDetails" class="subsection" hidden><h4>Domain registration</h4><dl class="compact-list"><div><dt>Registrar</dt><dd id="registrar">—</dd></div><div><dt>Registered</dt><dd id="registeredAt">—</dd></div><div><dt>Expires</dt><dd id="expiresAt">—</dd></div><div><dt>Name servers</dt><dd id="nameServers">—</dd></div></dl></div>
+          </section>
+        </div>
+
+        <section class="panel sources-panel" aria-labelledby="sources-heading">
+          <div class="panel-heading"><span class="panel-icon source-icon" aria-hidden="true">03</span><div><h3 id="sources-heading">Sources &amp; freshness</h3><p>Every result links to its public source</p></div></div>
+          <ul id="sourceList" class="source-list"></ul>
+        </section>
+        <p class="privacy-note"><span aria-hidden="true">i</span> Results are returned for this request only. No query history or permanent cache is kept. Live HTTP checks run only for hosts or CIDRs explicitly configured as authorized.</p>
+      </section>
+
+      <section id="emptyState" class="empty-state" aria-label="How it works">
+        <div class="empty-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit-core"><svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="13.5" stroke="currentColor" stroke-width="1.5"/><path d="M6.8 20h26.4M20 6.5c3.5 3.7 5.2 8.2 5.2 13.5S23.5 29.8 20 33.5c-3.5-3.7-5.2-8.2-5.2-13.5S16.5 10.2 20 6.5Z" stroke="currentColor" stroke-width="1.5"/></svg></span></div>
+        <h2>Everything you need for a first look.</h2>
+        <p>A single request brings together live HTTP behavior and public network context—without building a history of your searches.</p>
+        <div class="feature-row"><div><span class="feature-number">01</span><span>Check HTTP response</span></div><div><span class="feature-number">02</span><span>Enrich IP &amp; ASN</span></div><div><span class="feature-number">03</span><span>Trace every source</span></div></div>
+      </section>
+    </main>
+
+    <footer class="footer"><span>Signal Internet Lookup</span><span>Public infrastructure only <span class="meta-divider">·</span> No persistent storage</span></footer>
+  </body>
+</html>

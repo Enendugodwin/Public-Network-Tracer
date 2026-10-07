@@ -1,0 +1,3 @@
+# Local development only. Copy to `.dev.vars` (git-ignored) before running `npm run dev`.
+# Deploy-time secrets must be set with: npx wrangler secret put SHODAN_API_KEY
+# SHODAN_API_KEY=your-key-here
