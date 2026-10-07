@@ -9,6 +9,7 @@
     "run_worker_first": true
   },
   "vars": {
-    "EXTRA_PORTS": ""
+    "EXTRA_PORTS": "",
+    "ALLOWED_ORIGIN": ""
   }
 }

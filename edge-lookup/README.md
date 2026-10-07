@@ -134,6 +134,26 @@ npx wrangler deploy
 
 On push and pull requests, the `edge-lookup` GitHub Actions workflow runs `npm ci`, `typecheck`, and tests on Node 20 and 22. It does not deploy.
 
+## Hosting the dashboard on GitHub Pages
+
+GitHub Pages is static-only and **cannot run the Worker**, so Pages can host the dashboard but not the lookup API. If you want the UI on Pages:
+
+1. Deploy the Worker to Cloudflare (above) and note its origin, e.g. `https://public-network-tracer.<subdomain>.workers.dev`.
+2. Tell the Worker to accept the Pages origin:
+   ```jsonc
+   // wrangler.jsonc vars
+   "ALLOWED_ORIGIN": "https://<user>.github.io"
+   ```
+   This is an exact-match allowlist — never a wildcard. Leaving it empty means no cross-origin access at all.
+3. Point the dashboard at the Worker:
+   ```sh
+   gh variable set TRACER_API_BASE --body "https://<worker>.workers.dev"
+   ```
+   The `pages` workflow copies `edge-lookup/public/` to Pages and writes `config.js` with that value. Without the variable, the dashboard loads but lookups fail because there is no same-origin API.
+4. In the repository: *Settings → Pages → Build and deployment → Source: GitHub Actions*.
+
+Asset paths are relative, so the dashboard works both at the Worker root and under a Pages project subpath.
+
 ## Checks
 
 ```sh

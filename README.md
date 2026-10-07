@@ -48,7 +48,14 @@ npx wrangler login
 npx wrangler deploy
 ```
 
-GitHub Actions runs the test suite on push and pull requests. It does not deploy.
+The `pages` workflow can additionally publish the **dashboard** to GitHub Pages. Because Pages is static-only, the UI then calls the Worker cross-origin, which requires two settings:
+
+- Worker var `ALLOWED_ORIGIN` = `https://<user>.github.io` (exact match, no wildcard)
+- Repository variable `TRACER_API_BASE` = the deployed Worker origin
+
+Without `TRACER_API_BASE`, the Pages dashboard loads but lookups fail — there is no same-origin API. See [`edge-lookup/README.md`](edge-lookup/README.md#hosting-the-dashboard-on-github-pages) for the step-by-step.
+
+GitHub Actions runs the test suite on push and pull requests. It does not deploy the Worker.
 
 ## Layout
 

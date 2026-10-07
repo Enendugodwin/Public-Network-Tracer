@@ -277,4 +277,36 @@ describe("lookup API", () => {
     expect(statuses.slice(0, 12).every((status) => status === 200)).toBe(true);
     expect(statuses[12]).toBe(429);
   });
+
+  it("allows CORS only for an allowlisted origin and answers preflight", async () => {
+    installProviderMocks();
+    const origin = "https://enendugodwin.github.io";
+    const env = { ALLOWED_ORIGIN: origin };
+    const assets = { ASSETS: { fetch: async () => new Response("asset") } };
+
+    const post = (requestOrigin: string, ip: string) =>
+      worker.fetch(
+        new Request("https://lookup.test/api/lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "CF-Connecting-IP": ip, Origin: requestOrigin },
+          body: JSON.stringify({ target: "8.8.8.8" }),
+        }),
+        { ...assets, ...env } as never,
+      );
+
+    const allowed = await post(origin, "9.9.9.201");
+    expect(allowed.headers.get("Access-Control-Allow-Origin")).toBe(origin);
+    expect(allowed.headers.get("Vary")).toBe("Origin");
+
+    const denied = await post("https://evil.example", "9.9.9.202");
+    expect(denied.headers.get("Access-Control-Allow-Origin")).toBeNull();
+
+    const preflight = await worker.fetch(
+      new Request("https://lookup.test/api/lookup", { method: "OPTIONS", headers: { Origin: origin, "Access-Control-Request-Method": "POST" } }),
+      { ...assets, ...env } as never,
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe(origin);
+    expect(preflight.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+  });
 });

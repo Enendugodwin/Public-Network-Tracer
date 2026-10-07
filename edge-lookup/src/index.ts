@@ -4,6 +4,7 @@ import { connect } from "cloudflare:sockets";
 interface Env {
   ASSETS: Fetcher;
   EXTRA_PORTS?: string;
+  ALLOWED_ORIGIN?: string;
   SHODAN_API_KEY?: string;
 }
 
@@ -55,6 +56,34 @@ function json(data: unknown, status = 200): Response {
       "Referrer-Policy": "no-referrer",
     },
   });
+}
+
+/**
+ * CORS for the dashboard when it is hosted separately (e.g. GitHub Pages).
+ * Locked to an explicit origin allowlist — never a wildcard.
+ */
+function corsHeaders(request: Request, env: Pick<Env, "ALLOWED_ORIGIN">): Record<string, string> {
+  const origin = request.headers.get("Origin");
+  if (!origin) return {};
+  const allowed = (env.ALLOWED_ORIGIN ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!allowed.includes(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin",
+  };
+}
+
+function withCors(response: Response, cors: Record<string, string>): Response {
+  if (!Object.keys(cors).length) return response;
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(cors)) headers.set(name, value);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 type FailureCode =
@@ -886,16 +915,20 @@ export default {
       headers.set("X-Content-Type-Options", "nosniff");
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     }
-    if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
-    if (rateLimited(request)) return json({ error: "Lookup limit reached. Try again in a minute." }, 429);
+    const cors = corsHeaders(request, env);
+    const respond = (data: unknown, status = 200) => withCors(json(data, status), cors);
+
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    if (request.method !== "POST") return respond({ error: "Method not allowed." }, 405);
+    if (rateLimited(request)) return respond({ error: "Lookup limit reached. Try again in a minute." }, 429);
 
     try {
       const { target } = await parseRequest(request);
       const result = await doLookup(target, env, clientPublicIp(request));
-      return json(result);
+      return respond(result);
     } catch (error) {
-      if (error instanceof LookupError) return json({ error: error.message }, error.status);
-      return json({ error: "The lookup could not be completed." }, 502);
+      if (error instanceof LookupError) return respond({ error: error.message }, error.status);
+      return respond({ error: "The lookup could not be completed." }, 502);
     }
   },
 };

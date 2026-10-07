@@ -1,0 +1,51 @@
+name: pages
+
+# Publishes the static dashboard to GitHub Pages.
+#
+# Pages cannot run the Worker, so this only hosts the UI. Set the repository
+# variable TRACER_API_BASE to the deployed Worker origin (e.g.
+# https://public-network-tracer.<subdomain>.workers.dev) and list the Pages
+# origin in the Worker's ALLOWED_ORIGIN so the browser can call it.
+#
+#   gh variable set TRACER_API_BASE --body "https://<worker>.workers.dev"
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "edge-lookup/public/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage dashboard
+        run: |
+          mkdir -p _site
+          cp -r edge-lookup/public/. _site/
+          if [ -n "${{ vars.TRACER_API_BASE }}" ]; then
+            printf 'window.TRACER_API_BASE = "%s";\n' "${{ vars.TRACER_API_BASE }}" > _site/config.js
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

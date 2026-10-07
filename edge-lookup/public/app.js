@@ -1,4 +1,5 @@
 const form = document.querySelector("#lookupForm");
+const API_BASE = String(window.TRACER_API_BASE ?? "").replace(/\/+$/, "");
 const input = document.querySelector("#targetInput");
 const button = document.querySelector("#checkButton");
 const status = document.querySelector("#formStatus");
@@ -217,7 +218,7 @@ form.addEventListener("submit", async (event) => {
   button.querySelector("span").textContent = "Checking…";
   status.classList.remove("error");
   try {
-    const response = await fetch("/api/lookup", {
+    const response = await fetch(`${API_BASE}/api/lookup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target: input.value }),
