@@ -310,8 +310,18 @@ describe("lookup API", () => {
     expect(preflight.headers.get("Access-Control-Allow-Methods")).toContain("POST");
   });
 
-  describe("response body capture", () => {
-    function stubFetch(handler: (url: string, method: string) => Response) {
+  it("marks TCP inconclusive when HTTP succeeded but every raw connect was refused", async () => {
+    installProviderMocks();
+    socketState.mode = "throw";
+    const response = await requestLookup({});
+    const body = await response.json() as any;
+    expect(body.http.status).toBe("complete");
+    expect(body.tcp.status).toBe("inconclusive");
+    expect(body.tcp.reason).toMatch(/unavailable rather than closed/i);
+    expect(body.diagnosis.evidence.join(" ")).toMatch(/not measurable/i);
+  });
+
+  describe("response body capture", () => {    function stubFetch(handler: (url: string, method: string) => Response) {
       const calls: Array<{ url: string; method: string }> = [];
       vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
         const url = input instanceof Request ? input.url : String(input);

@@ -51,6 +51,7 @@ Stages start concurrently; TCP and enrichment await only the DNS step. Every non
 - Workers Fetch does not reveal the negotiated TLS protocol version.
 - The probe source is Cloudflare's egress. A true from-your-IP test would require an agent running at that IP and is explicitly out of scope.
 - Workers cannot send ICMP, so no ping is offered.
+- **Raw TCP is blocked toward Cloudflare's own IP ranges.** `connect()` cannot reach Cloudflare-hosted destinations (a large share of the web, including anything behind Cloudflare's CDN), so those TCP checks return refused regardless of the real port state. When HTTP succeeds but every TCP connect is refused, the result is reported as `inconclusive` rather than `closed` so it is not mistaken for a genuine finding.
 - Some servers omit `Content-Length` on `HEAD`, so that field can be blank even on success.
 - Domain DNS resolution is checked immediately before a scoped HTTP request, but the platform's fetch resolver performs its own resolution. Use Cloudflare egress protections if you need a stricter guarantee.
 - Public provider terms, quotas, and availability apply. `rdap.org` occasionally rate-limits; affected fields are shown as unavailable rather than inferred.

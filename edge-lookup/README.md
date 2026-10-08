@@ -120,6 +120,8 @@ The key is never sent to the browser. Without it, the app still uses DNS, RDAP, 
 - **Response body (opt-in):** first 16 KB only, never stored, decoded as text only for textual content types, and rendered as inert text. Challenge/interstitial markers are extracted and feed the diagnosis.
 - **TCP reachability:** TCP connect checks to a bounded port list (default `80`, `443`; extras via `EXTRA_PORTS`, capped at 16). A refused or filtered port is reported as closed, never as open. There is no ICMP, so no ping.
 
+  **Known limitation:** Workers cannot open raw TCP to Cloudflare's own IP ranges, so Cloudflare-hosted destinations report refused even when the port is open. When HTTP succeeds but every TCP connect is refused, the result is marked `inconclusive` instead of `closed` — treat those ports as unavailable, not down.
+
 The API returns source URLs, collection timestamps, and confidence labels with public-source results. It does not retain those results. The search target is sent to the configured public providers needed for lookup; do not submit secrets or credential-bearing URLs.
 
 The in-isolate rate limiter is best-effort only. This is deployed on a public URL, so configure Cloudflare platform-level rate limiting/WAF rules on the Worker route before relying on it.

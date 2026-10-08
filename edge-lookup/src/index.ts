@@ -824,10 +824,29 @@ type Diagnosis = { category: string; severity: "ok" | "warn" | "bad"; title: str
 const BLOCKING_STATUS = new Set([403, 406, 429, 451, 503]);
 
 function summarizeTcp(tcp: any): string | null {
+  if (tcp?.status === "inconclusive") return "TCP: not measurable from this vantage point";
   const checks: any[] = tcp?.checks ?? [];
   if (!checks.length) return null;
   const open = checks.filter((check) => check.reachable).map((check) => `:${check.port}`);
   return open.length ? `open ports: ${open.join(", ")}` : "no web ports open";
+}
+
+/**
+ * A refused TCP connect is only meaningful if it agrees with the HTTP result.
+ * When HTTP reached the host but every raw TCP connect was refused, the port
+ * results are an artifact of the checker's network (Workers cannot open raw
+ * TCP to Cloudflare's own ranges, which covers a large share of the web), not
+ * evidence that the ports are closed.
+ */
+function reconcileTcp(http: any, tcp: any): any {
+  if (http?.status !== "complete" || tcp?.status !== "complete") return tcp;
+  const checks: any[] = tcp.checks ?? [];
+  if (!checks.length || checks.some((check) => check.reachable)) return tcp;
+  return {
+    ...tcp,
+    status: "inconclusive",
+    reason: "HTTP reached the host, but every raw TCP connect was refused. The checker's network is likely blocking direct TCP to this destination (typical for Cloudflare-hosted sites), so treat these ports as unavailable rather than closed.",
+  };
 }
 
 function diagnose(http: any, tcp: any): Diagnosis {
@@ -957,7 +976,8 @@ async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | n
   const tcpPromise = resolution.then((r) => probeTcp(target, env, r.ip));
   const enrichmentPromise = resolution.then((r) => enrichTarget(target, r.ip, env));
 
-  const [resolved, http, tcp, enrichment] = await Promise.all([resolution, httpPromise, tcpPromise, enrichmentPromise]);
+  const [resolved, http, tcpRaw, enrichment] = await Promise.all([resolution, httpPromise, tcpPromise, enrichmentPromise]);
+  const tcp = reconcileTcp(http, tcpRaw);
 
   const sources: SourceCitation[] = [...resolved.sources, ...enrichment.sources];
   if (http.status === "complete" && http.source) sources.push(http.source as SourceCitation);
