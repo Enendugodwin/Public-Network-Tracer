@@ -25,8 +25,17 @@ One lookup runs live reachability checks and pairs them with public data:
 | DNS (A/AAAA) | Always | Cloudflare DNS-over-HTTPS |
 | HTTP `HEAD` | Always | Any public target; one request, bounded redirects |
 | TCP `80`, `443` | Always | "Can we reach the site?" |
+| Response body | Off | Dashboard toggle; switches to `GET`, first 16 KB |
 | Extra TCP ports | Off | Opt in via `EXTRA_PORTS` |
 | Shodan host data | Off | Opt in via `SHODAN_API_KEY` |
+
+### Reading the response body
+
+Tick **Fetch response body** to see what the destination actually returned. That switches the probe from `HEAD` to `GET` and captures the first 16 KB, which is usually enough to tell a WAF challenge page from a real application error.
+
+The captured body is reported as `contentType`, `bytesRead`, `truncated`, `textual`, `title`, and `markers` — where markers flag things like *Cloudflare challenge*, *Bot-check interstitial*, *CAPTCHA present*, or *Access-denied page*. Markers feed the diagnosis evidence, so a blocked site explains itself.
+
+Safety: the body is capped at 16 KB, never stored, and rendered in the dashboard as **inert text** (`textContent`, never `innerHTML`) so a hostile page cannot inject markup or script. Binary content types are not decoded at all.
 
 Enrichment: RDAP (IP, ASN, domain registration), Team Cymru ASN/prefix/country, and optional Shodan ports, services, and certificate fingerprints.
 

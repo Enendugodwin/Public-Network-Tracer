@@ -309,4 +309,77 @@ describe("lookup API", () => {
     expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe(origin);
     expect(preflight.headers.get("Access-Control-Allow-Methods")).toContain("POST");
   });
+
+  describe("response body capture", () => {
+    function stubFetch(handler: (url: string, method: string) => Response) {
+      const calls: Array<{ url: string; method: string }> = [];
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+        calls.push({ url, method });
+        if (url.includes("cloudflare-dns.com")) {
+          const type = new URL(url).searchParams.get("type");
+          if (type === "TXT") return Response.json({ Answer: [{ type: 16, data: '"13335 | 104.20.0.0/16 | US | arin | 2014-03-28"' }] });
+          return Response.json({ Answer: [{ type: type === "A" ? 1 : 28, data: type === "A" ? "104.20.23.154" : "2606:4700::1" }] });
+        }
+        if (url.includes("rdap.org")) return Response.json({});
+        return handler(url, method);
+      });
+      return calls;
+    }
+
+    async function lookup(captureBody: boolean) {
+      const request = new Request("https://lookup.test/api/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": `9.9.9.${captureBody ? 211 : 212}` },
+        body: JSON.stringify({ target: "blocked.example", captureBody }),
+      });
+      return worker.fetch(request, { ASSETS: { fetch: async () => new Response("asset") } } as never);
+    }
+
+    it("uses HEAD and captures nothing by default", async () => {
+      const calls = stubFetch(() => new Response(null, { status: 200, headers: { server: "fixture" } }));
+      const body = await (await lookup(false)).json() as any;
+      expect(calls.filter((call) => call.method === "HEAD")).toHaveLength(1);
+      expect(calls.some((call) => call.method === "GET" && call.url.startsWith("https://blocked.example"))).toBe(false);
+      expect(body.http.body).toBeNull();
+    });
+
+    it("uses GET and surfaces the title and challenge markers when asked", async () => {
+      const html = "<html><head><title>  Just a moment...  </title></head><body><div id=\"cf-chl\">Enable JavaScript and cookies to continue</div></body></html>";
+      const calls = stubFetch(() => new Response(html, {
+        status: 403,
+        headers: { "content-type": "text/html; charset=utf-8", server: "cloudflare", "cf-ray": "abc-LHR" },
+      }));
+
+      const body = await (await lookup(true)).json() as any;
+      expect(calls.filter((call) => call.method === "GET" && call.url.startsWith("https://blocked.example"))).toHaveLength(1);
+      expect(body.http.body.contentType).toMatch(/text\/html/);
+      expect(body.http.body.textual).toBe(true);
+      expect(body.http.body.title).toBe("Just a moment...");
+      expect(body.http.body.markers).toContain("Cloudflare challenge");
+      expect(body.http.body.bytesRead).toBeGreaterThan(0);
+      expect(body.http.body.truncated).toBe(false);
+      expect(body.http.source.name).toMatch(/GET/);
+      // The page evidence feeds the diagnosis.
+      expect(body.diagnosis.category).toBe("waf_block");
+      expect(body.diagnosis.evidence.join(" ")).toMatch(/page: Cloudflare challenge/);
+    });
+
+    it("marks a body larger than the cap as truncated", async () => {
+      const huge = "x".repeat(40_000);
+      stubFetch(() => new Response(huge, { status: 200, headers: { "content-type": "text/plain" } }));
+      const body = await (await lookup(true)).json() as any;
+      expect(body.http.body.bytesRead).toBe(16_384);
+      expect(body.http.body.truncated).toBe(true);
+    });
+
+    it("does not decode binary bodies as text", async () => {
+      stubFetch(() => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { status: 200, headers: { "content-type": "image/png" } }));
+      const body = await (await lookup(true)).json() as any;
+      expect(body.http.body.textual).toBe(false);
+      expect(body.http.body.text).toBeNull();
+      expect(body.http.body.title).toBeNull();
+    });
+  });
 });

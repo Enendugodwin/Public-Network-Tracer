@@ -140,6 +140,24 @@ function renderTcp(tcp) {
   note.textContent = "TCP connect checks run from the checker's edge network, not from your IP. There is no ICMP ping.";
 }
 
+function renderBody(body) {
+  const section = document.querySelector("#bodySection");
+  section.hidden = !body;
+  if (!body) return;
+
+  setText("#bodyType", body.contentType, "unknown");
+  const size = body.bytesRead == null ? "—" : `${formatBytes(body.bytesRead)}${body.truncated ? " (truncated)" : ""}`;
+  setText("#bodySize", size);
+  setText("#bodyTitle", body.title, "—");
+  addTokens(document.querySelector("#bodyMarkers"), body.markers ?? [], "");
+
+  const pre = document.querySelector("#bodyText");
+  const showText = body.textual && typeof body.text === "string" && body.text.length > 0;
+  pre.hidden = !showText;
+  // textContent, never innerHTML: the remote page is data, not markup.
+  pre.textContent = showText ? body.text : "";
+}
+
 function renderDiagnosis(diagnosis) {
   const block = document.querySelector("#diagnosis");
   if (!diagnosis) {
@@ -182,6 +200,7 @@ function render(data) {
   setText("#httpTls", http.tls?.enabled ? "HTTPS · version not exposed" : http.tls ? "HTTP · no TLS" : "—");
   setText("#httpRedirect", http.status === "complete" ? (http.redirected ? `${http.redirects?.length ?? 0} hop(s)` : "No") : "—");
   addTokens(document.querySelector("#httpHeaders"), Object.entries(http.headers ?? {}).map(([name, value]) => `${name}: ${value}`), "No selected response headers");
+  renderBody(http.body);
 
   const network = data.network ?? {};
   setText("#networkIp", network.ip);
@@ -223,7 +242,7 @@ form.addEventListener("submit", async (event) => {
       response = await fetch(`${API_BASE}/api/lookup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: input.value }),
+        body: JSON.stringify({ target: input.value, captureBody: document.querySelector("#captureBody")?.checked === true }),
       });
     } catch {
       throw new Error("Could not reach the lookup API. Check TRACER_API_BASE and the Worker's ALLOWED_ORIGIN.");

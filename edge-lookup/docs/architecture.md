@@ -37,7 +37,8 @@ Stages start concurrently; TCP and enrichment await only the DNS step. Every non
 
 - Only public IPs and fully-qualified public DNS names are accepted; localhost, private/reserved ranges, unsupported protocols, embedded credentials, and nonstandard ports are rejected.
 - Public data requests go only to fixed provider endpoints. User input is never used as a provider URL.
-- Active checks are **on by default**, because the product is an access-troubleshooting tool for network teams. The safety model is boundedness rather than an allowlist: one HTTP `HEAD`, at most 16 TCP connects, no request bodies, no response bodies, no crawling, no banner grabbing, and a per-client rate limit.
+- Active checks are **on by default**, because the product is an access-troubleshooting tool for network teams. The safety model is boundedness rather than an allowlist: one HTTP request (`HEAD`, or `GET` when body capture is requested), at most 16 TCP connects, no response bodies unless explicitly requested, no crawling, no banner grabbing, and a per-client rate limit.
+- Response-body capture is opt-in and bounded to 16 KB. The body is never persisted, is decoded only for textual content types, and is rendered in the dashboard as inert text via `textContent` — never as markup — so a hostile page cannot inject script.
 - Redirects are revalidated at every hop against the public-target rules, so a redirect cannot be used to reach a private address.
 - Extra TCP ports beyond `80`/`443` require explicit operator opt-in via `EXTRA_PORTS`.
 - The displayed source IP is the visitor's `CF-Connecting-IP` observed at the edge. It is a label, not a probe origin: the probes egress from the checker's network.

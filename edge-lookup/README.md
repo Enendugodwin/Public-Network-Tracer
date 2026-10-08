@@ -116,7 +116,8 @@ The key is never sent to the browser. Without it, the app still uses DNS, RDAP, 
 - **IP/domain registration:** RDAP.
 - **ASN/prefix/country:** Team Cymru origin ASN DNS service over Cloudflare DoH; RDAP is used for the ASN organization name where available.
 - **Observed services and certificates:** optional Shodan Host API; ports, concise product/version labels, and certificate fingerprints/summary metadata are returned, never raw service banners.
-- **HTTP:** one bounded `HEAD` request, with a small redirect limit and revalidation at every hop. Workers' Fetch API does not expose the negotiated TLS version, so the UI reports HTTPS without claiming a TLS version.
+- **HTTP:** one bounded request per lookup — `HEAD` by default, or `GET` when body capture is requested. Small redirect limit with revalidation at every hop. Workers' Fetch API does not expose the negotiated TLS version, so the UI reports HTTPS without claiming a TLS version.
+- **Response body (opt-in):** first 16 KB only, never stored, decoded as text only for textual content types, and rendered as inert text. Challenge/interstitial markers are extracted and feed the diagnosis.
 - **TCP reachability:** TCP connect checks to a bounded port list (default `80`, `443`; extras via `EXTRA_PORTS`, capped at 16). A refused or filtered port is reported as closed, never as open. There is no ICMP, so no ping.
 
 The API returns source URLs, collection timestamps, and confidence labels with public-source results. It does not retain those results. The search target is sent to the configured public providers needed for lookup; do not submit secrets or credential-bearing URLs.

@@ -26,6 +26,7 @@ type SourceCitation = {
 
 const MAX_BODY_BYTES = 8_192;
 const MAX_UPSTREAM_BYTES = 512_000;
+const MAX_CAPTURE_BYTES = 16_384;
 const MAX_REDIRECTS = 4;
 const MAX_LOOKUPS_PER_MINUTE = 12;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -306,7 +307,73 @@ async function readBounded(stream: ReadableStream<Uint8Array> | null, maxBytes: 
   return bytes;
 }
 
-async function parseRequest(request: Request): Promise<{ target: NormalizedTarget }> {
+function extractTitle(text: string): string | null {
+  const match = text.match(/<title[^>]*>([\s\S]{0,300}?)<\/title>/i);
+  if (!match) return null;
+  const title = match[1].replace(/\s+/g, " ").trim();
+  return title ? title.slice(0, 200) : null;
+}
+
+const CHALLENGE_MARKERS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /just a moment/i, label: "Cloudflare challenge" },
+  { pattern: /cf-chl|cf_chl|__cf_chl|cf-mitigated/i, label: "Cloudflare challenge" },
+  { pattern: /attention required/i, label: "Cloudflare block page" },
+  { pattern: /enable javascript and cookies to continue/i, label: "Bot-check interstitial" },
+  { pattern: /incapsula|_incapsula_/i, label: "Imperva interstitial" },
+  { pattern: /request blocked|access denied|forbidden/i, label: "Access-denied page" },
+  { pattern: /captcha|recaptcha|hcaptcha|turnstile/i, label: "CAPTCHA present" },
+  { pattern: /<title>\s*429|too many requests/i, label: "Rate-limit page" },
+];
+
+const TEXTUAL_CONTENT = /^(text\/|application\/(json|xml|xhtml\+xml|javascript|problem\+json|ld\+json))/i;
+
+/** Read at most `maxBytes` from a stream, reporting whether more remained. */
+async function readBoundedPrefix(stream: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  if (!stream) return { bytes: new Uint8Array(), truncated: false };
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let truncated = false;
+  try {
+    while (size < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - size;
+      if (value.byteLength >= remaining) {
+        chunks.push(value.subarray(0, remaining));
+        size = maxBytes;
+        truncated = value.byteLength > remaining;
+        break;
+      }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+    if (size >= maxBytes && !truncated) {
+      try {
+        const { done } = await reader.read();
+        truncated = !done;
+      } catch {
+        truncated = false;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Stream already closed.
+    }
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes, truncated };
+}
+
+async function parseRequest(request: Request): Promise<{ target: NormalizedTarget; captureBody: boolean }> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     throw new LookupError("Send a JSON request.", 415);
   }
@@ -322,7 +389,10 @@ async function parseRequest(request: Request): Promise<{ target: NormalizedTarge
   if (!data || typeof data !== "object" || typeof (data as { target?: unknown }).target !== "string") {
     throw new LookupError("Provide a target field containing an IP, domain, or URL.");
   }
-  return { target: normalizeTarget((data as { target: string }).target) };
+  return {
+    target: normalizeTarget((data as { target: string }).target),
+    captureBody: (data as { captureBody?: unknown }).captureBody === true,
+  };
 }
 
 async function fetchJson(url: string, accept = "application/json"): Promise<unknown> {
@@ -526,7 +596,7 @@ function safeRedirectUrl(location: string, current: URL): URL | null {
   }
 }
 
-async function probeHttp(initial: NormalizedTarget): Promise<Record<string, unknown>> {
+async function probeHttp(initial: NormalizedTarget, captureBody = false): Promise<Record<string, unknown>> {
   let current = new URL(initial.url);
   const redirects: string[] = [];
   let startedAt: number | null = null;
@@ -548,7 +618,7 @@ async function probeHttp(initial: NormalizedTarget): Promise<Record<string, unkn
     try {
       startedAt ??= Date.now();
       const response = await fetch(current, {
-        method: "HEAD",
+        method: captureBody ? "GET" : "HEAD",
         redirect: "manual",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
@@ -563,7 +633,8 @@ async function probeHttp(initial: NormalizedTarget): Promise<Record<string, unkn
         current = next;
         continue;
       }
-      await response.body?.cancel();
+      const body = captureBody ? await captureResponseBody(response) : null;
+      if (!captureBody) await response.body?.cancel();
       return {
         status: "complete",
         statusCode: response.status,
@@ -578,8 +649,9 @@ async function probeHttp(initial: NormalizedTarget): Promise<Record<string, unkn
         tls: current.protocol === "https:" ? { enabled: true, version: null } : { enabled: false, version: null },
         redirected: redirects.length > 0,
         redirects,
+        body,
         checkedAt: new Date().toISOString(),
-        source: citation("Live HTTP HEAD check", current.origin, 100),
+        source: citation(captureBody ? "Live HTTP GET check" : "Live HTTP HEAD check", current.origin, 100),
       };
     } catch (error) {
       return failure(classifyFetchError(error), { redirects, responseTimeMs: startedAt === null ? null : Date.now() - startedAt });
@@ -592,6 +664,36 @@ function parseContentLength(value: string | null): number | null {
   if (!value || !/^\d+$/.test(value)) return null;
   const length = Number(value);
   return Number.isSafeInteger(length) ? length : null;
+}
+
+type CapturedBody = {
+  contentType: string | null;
+  bytesRead: number;
+  truncated: boolean;
+  textual: boolean;
+  title: string | null;
+  markers: string[];
+  text: string | null;
+};
+
+/**
+ * Read a bounded prefix of the response body for display. Never persisted, and
+ * only the first MAX_CAPTURE_BYTES are kept; binary types are not decoded.
+ */
+async function captureResponseBody(response: Response): Promise<CapturedBody> {
+  const contentType = response.headers.get("content-type");
+  const { bytes, truncated } = await readBoundedPrefix(response.body, MAX_CAPTURE_BYTES);
+  const textual = TEXTUAL_CONTENT.test(contentType ?? "");
+  const text = textual ? new TextDecoder("utf-8").decode(bytes) : null;
+  return {
+    contentType: contentType?.slice(0, 160) ?? null,
+    bytesRead: bytes.byteLength,
+    truncated,
+    textual,
+    title: text ? extractTitle(text) : null,
+    markers: text ? [...new Set(CHALLENGE_MARKERS.filter((marker) => marker.pattern.test(text)).map((marker) => marker.label))] : [],
+    text,
+  };
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -734,6 +836,8 @@ function diagnose(http: any, tcp: any): Diagnosis {
   if (tcpSummary) evidence.push(tcpSummary);
   const edgeLabels: string[] = http?.edge?.labels ?? [];
   const edgeEvidence = edgeLabels.map((label) => `edge: ${label}`);
+  const bodyMarkers: string[] = http?.body?.markers ?? [];
+  const bodyEvidence = bodyMarkers.map((marker) => `page: ${marker}`);
 
   if (http?.status === "complete") {
     const code: number = http.statusCode;
@@ -745,7 +849,7 @@ function diagnose(http: any, tcp: any): Diagnosis {
         severity: "warn",
         title: "Blocked at the edge / WAF",
         summary: "The site is reachable, but an edge or WAF layer refused the request. This is a deliberate block or bot rule, not a network fault.",
-        evidence: [...base, ...edgeEvidence],
+        evidence: [...base, ...edgeEvidence, ...bodyEvidence],
       };
     }
     if (BLOCKING_STATUS.has(code)) {
@@ -754,11 +858,11 @@ function diagnose(http: any, tcp: any): Diagnosis {
         severity: "warn",
         title: "Request rejected by the server",
         summary: `The origin answered ${code}. Reachability is fine; the server declined the request (rate limit, bot rule, or access policy).`,
-        evidence: base,
+        evidence: [...base, ...bodyEvidence],
       };
     }
     if (code === 401) {
-      return { category: "auth_required", severity: "warn", title: "Authentication required", summary: "The site is reachable but requires credentials (401).", evidence: base };
+      return { category: "auth_required", severity: "warn", title: "Authentication required", summary: "The site is reachable but requires credentials (401).", evidence: [...base, ...bodyEvidence] };
     }
     if (code >= 500) {
       return {
@@ -766,18 +870,18 @@ function diagnose(http: any, tcp: any): Diagnosis {
         severity: "bad",
         title: "Origin server error",
         summary: `The site is reachable, but the origin returned ${code}. The destination is up; its application is failing.`,
-        evidence: base,
+        evidence: [...base, ...bodyEvidence],
       };
     }
     if (code >= 400) {
-      return { category: "client_rejected", severity: "warn", title: "Request rejected", summary: `The origin answered ${code}.`, evidence: base };
+      return { category: "client_rejected", severity: "warn", title: "Request rejected", summary: `The origin answered ${code}.`, evidence: [...base, ...bodyEvidence] };
     }
     return {
       category: "reachable",
       severity: "ok",
       title: "Reachable",
       summary: `The site answered ${code} from the checker's network.`,
-      evidence: [...base, ...edgeEvidence],
+      evidence: [...base, ...edgeEvidence, ...bodyEvidence],
     };
   }
 
@@ -845,11 +949,11 @@ function diagnose(http: any, tcp: any): Diagnosis {
   }
 }
 
-async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | null): Promise<Record<string, unknown>> {
+async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | null, captureBody = false): Promise<Record<string, unknown>> {
   // Overlap the independent work: HTTP does not need DNS, and TCP/enrichment
   // start as soon as the address is known rather than after the other stages.
   const resolution = resolveTarget(target);
-  const httpPromise = probeHttp(target);
+  const httpPromise = probeHttp(target, captureBody);
   const tcpPromise = resolution.then((r) => probeTcp(target, env, r.ip));
   const enrichmentPromise = resolution.then((r) => enrichTarget(target, r.ip, env));
 
@@ -923,8 +1027,8 @@ export default {
     if (rateLimited(request)) return respond({ error: "Lookup limit reached. Try again in a minute." }, 429);
 
     try {
-      const { target } = await parseRequest(request);
-      const result = await doLookup(target, env, clientPublicIp(request));
+      const { target, captureBody } = await parseRequest(request);
+      const result = await doLookup(target, env, clientPublicIp(request), captureBody);
       return respond(result);
     } catch (error) {
       if (error instanceof LookupError) return respond({ error: error.message }, error.status);

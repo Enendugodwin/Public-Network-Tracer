@@ -44,7 +44,13 @@
             <button type="button" class="example-chip" data-target="8.8.8.8">8.8.8.8</button>
             <button type="button" class="example-chip" data-target="example.com">example.com</button>
           </div>
-          <p class="search-hint">One request · public data only · no saved results</p>
+          <div class="search-options">
+            <label class="body-toggle" for="captureBody">
+              <input type="checkbox" id="captureBody" />
+              <span>Fetch response body</span>
+            </label>
+            <p class="search-hint">One request · public data only · no saved results</p>
+          </div>
         </div>
         <p id="formStatus" class="form-status" role="status" aria-live="polite"></p>
       </section>
@@ -100,6 +106,17 @@
               <div><dt>Redirect</dt><dd id="httpRedirect">—</dd></div>
             </dl>
             <div class="subsection"><h4>Selected response headers</h4><div id="httpHeaders" class="token-list"><span class="muted">No response headers</span></div></div>
+            <div class="subsection" id="bodySection" hidden>
+              <h4>Response body</h4>
+              <dl class="compact-list">
+                <div><dt>Content type</dt><dd id="bodyType">—</dd></div>
+                <div><dt>Captured</dt><dd id="bodySize">—</dd></div>
+                <div><dt>Page title</dt><dd id="bodyTitle">—</dd></div>
+              </dl>
+              <div id="bodyMarkers" class="token-list"></div>
+              <pre id="bodyText" class="body-preview"></pre>
+              <p class="micro-note">Shown as inert text and never executed. Capped at 16 KB and not stored anywhere.</p>
+            </div>
             <div class="subsection"><h4>TCP reachability</h4><div id="tcpChecks" class="token-list"><span class="muted">No TCP checks run</span></div><p id="tcpNote" class="micro-note"></p></div>
           </section>
 
