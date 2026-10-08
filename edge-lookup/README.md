@@ -121,38 +121,58 @@ The key is never sent to the browser. Without it, the app still uses DNS, RDAP, 
 
 The API returns source URLs, collection timestamps, and confidence labels with public-source results. It does not retain those results. The search target is sent to the configured public providers needed for lookup; do not submit secrets or credential-bearing URLs.
 
-The in-isolate rate limiter is best-effort only. Configure Cloudflare platform-level rate limiting/WAF rules before exposing a public deployment. This project has **not** been deployed.
+The in-isolate rate limiter is best-effort only. This is deployed on a public URL, so configure Cloudflare platform-level rate limiting/WAF rules on the Worker route before relying on it.
 
-## Deploy (manual)
+## Live deployment
 
-You deploy this yourself; nothing is auto-published. From this directory, logged in to Cloudflare:
+| | URL |
+|---|---|
+| Worker API + dashboard (same-origin) | https://public-network-tracer.enendugodwin.workers.dev |
+| Dashboard (GitHub Pages) | https://enendugodwin.github.io/Public-Network-Tracer/ |
+| Health | https://public-network-tracer.enendugodwin.workers.dev/healthz |
+
+## Deploy
+
+The Worker is built and deployed by Cloudflare's Git-connected build on push to `main`. Manual deploys still work:
 
 ```sh
 npx wrangler login
 npx wrangler deploy
 ```
 
+### Cloudflare build settings
+
+The app is in a subdirectory, so the build must run from it:
+
+| Field | Value |
+|---|---|
+| Root directory | `edge-lookup` |
+| Build command | *(leave empty — `wrangler` bundles the TypeScript itself)* |
+| Deploy command | `npx wrangler deploy` |
+
+From the repo root the deploy fails with `Could not detect a directory containing static files`, and the build also runs a pointless `pip install` against the Python prototype next door.
+
 On push and pull requests, the `edge-lookup` GitHub Actions workflow runs `npm ci`, `typecheck`, and tests on Node 20 and 22. It does not deploy.
 
 ## Hosting the dashboard on GitHub Pages
 
-GitHub Pages is static-only and **cannot run the Worker**, so Pages can host the dashboard but not the lookup API. If you want the UI on Pages:
+GitHub Pages is static-only and **cannot run the Worker**, so Pages hosts the dashboard while the Worker provides the API. That cross-origin split needs both ends configured — as they are in this repository:
 
-1. Deploy the Worker to Cloudflare (above) and note its origin, e.g. `https://public-network-tracer.<subdomain>.workers.dev`.
-2. Tell the Worker to accept the Pages origin:
+1. **Worker accepts the Pages origin** — `wrangler.jsonc`:
    ```jsonc
-   // wrangler.jsonc vars
-   "ALLOWED_ORIGIN": "https://<user>.github.io"
+   "ALLOWED_ORIGIN": "https://enendugodwin.github.io"
    ```
-   This is an exact-match allowlist — never a wildcard. Leaving it empty means no cross-origin access at all.
-3. Point the dashboard at the Worker:
-   ```sh
-   gh variable set TRACER_API_BASE --body "https://<worker>.workers.dev"
+   Exact match, never a wildcard. Empty means no cross-origin access at all.
+2. **Dashboard knows the API** — `public/config.js`:
+   ```js
+   window.TRACER_API_BASE = "https://public-network-tracer.enendugodwin.workers.dev";
    ```
-   The `pages` workflow copies `edge-lookup/public/` to Pages and writes `config.js` with that value. Without the variable, the dashboard loads but lookups fail because there is no same-origin API.
-4. In the repository: *Settings → Pages → Build and deployment → Source: GitHub Actions*.
+   A repository variable named `TRACER_API_BASE` overrides this file during the Pages build.
+3. **Pages source** — repository *Settings → Pages → Build and deployment → Source: GitHub Actions*.
 
-Asset paths are relative, so the dashboard works both at the Worker root and under a Pages project subpath.
+If either side is missing, the dashboard loads but every lookup fails: with no API base it requests `/api/lookup` from `github.io`, and without the allowlist the browser blocks the cross-origin call.
+
+Asset paths are relative, so the dashboard works both at the Worker root and under the Pages project subpath.
 
 ## Checks
 

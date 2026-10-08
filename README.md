@@ -4,6 +4,18 @@ A stateless, serverless lookup for network teams: enter a **public IP, domain, o
 
 The app lives in [`edge-lookup/`](edge-lookup/README.md).
 
+## Live
+
+| | URL |
+|---|---|
+| Dashboard (GitHub Pages) | https://enendugodwin.github.io/Public-Network-Tracer/ |
+| Worker API + dashboard (same-origin) | https://public-network-tracer.enendugodwin.workers.dev |
+| Health check | https://public-network-tracer.enendugodwin.workers.dev/healthz |
+
+The Worker serves the dashboard itself, so that URL needs no CORS. The Pages copy is static and calls the Worker cross-origin, using the origin allowlisted in `ALLOWED_ORIGIN`.
+
+Try `example.com` (reachable), `openai.com` (403 → `waf_block`), `8.8.8.8` (`:80` closed), or a typo'd domain (`DNS_NO_RECORDS`).
+
 ## What it does
 
 One lookup runs live reachability checks and pairs them with public data:
@@ -39,21 +51,31 @@ Example: `openai.com` returns 403 with `server: cloudflare` → `waf_block`; `di
 
 ## Hosting
 
-The repository is on GitHub, but **GitHub Pages cannot run this app** — the lookup needs a serverless runtime. Deploy the Worker to Cloudflare yourself:
+Two deploy targets, both driven from this repository:
 
-```sh
-cd edge-lookup
-npm install
-npx wrangler login
-npx wrangler deploy
-```
+| Target | Driven by | Live at |
+|---|---|---|
+| Worker API + dashboard | Cloudflare Workers (Git-connected build) | https://public-network-tracer.enendugodwin.workers.dev |
+| Static dashboard | [`.github/workflows/pages.yml`](.github/workflows/pages.yml) → GitHub Pages | https://enendugodwin.github.io/Public-Network-Tracer/ |
 
-The `pages` workflow can additionally publish the **dashboard** to GitHub Pages. Because Pages is static-only, the UI then calls the Worker cross-origin, which requires two settings:
+**GitHub Pages cannot run the Worker** — it is static only. The Pages copy therefore calls the API cross-origin, which requires both ends to agree:
 
-- Worker var `ALLOWED_ORIGIN` = `https://<user>.github.io` (exact match, no wildcard)
-- Repository variable `TRACER_API_BASE` = the deployed Worker origin
+- `edge-lookup/wrangler.jsonc` → `ALLOWED_ORIGIN` = `https://enendugodwin.github.io` (exact match, never a wildcard; empty means no cross-origin access)
+- `edge-lookup/public/config.js` → `TRACER_API_BASE` = the Worker origin. A repository variable named `TRACER_API_BASE` overrides this file during the Pages build.
 
-Without `TRACER_API_BASE`, the Pages dashboard loads but lookups fail — there is no same-origin API. See [`edge-lookup/README.md`](edge-lookup/README.md#hosting-the-dashboard-on-github-pages) for the step-by-step.
+If either is missing, the dashboard loads but every lookup fails: with no API base it asks `github.io` for `/api/lookup`, and without the Worker's allowlist the browser blocks the cross-origin call.
+
+### Cloudflare build settings
+
+The app lives in a subdirectory, so the build **must** run from there:
+
+| Field | Value |
+|---|---|
+| Root directory | `edge-lookup` |
+| Build command | *(leave empty — `wrangler` bundles the TypeScript itself)* |
+| Deploy command | `npx wrangler deploy` |
+
+Pointing the build at the repo root fails with `Could not detect a directory containing static files`, and it will also try to `pip install` the Python prototype.
 
 GitHub Actions runs the test suite on push and pull requests. It does not deploy the Worker.
 
