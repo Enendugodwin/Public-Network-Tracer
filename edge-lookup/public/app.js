@@ -20,6 +20,11 @@ function apiBase() {
   return localDev ? "" : configured;
 }
 const HISTORY_KEY = "pit.history.v1";
+const SHODAN_KEY_STORAGE = "pit.shodanKey.v1";
+const SHODAN_KEY_PATTERN = /^[A-Za-z0-9]{16,64}$/;
+
+/** Held in memory unless the user explicitly asks to remember it. */
+let shodanKey = "";
 const HISTORY_MAX = 8;
 const PUBLIC_IP_ENDPOINT = "https://www.cloudflare.com/cdn-cgi/trace";
 
@@ -91,6 +96,63 @@ async function detectBrowserPublicIp() {
   } catch {
     return null;
   }
+}
+
+/* ---------- optional Shodan key (bring your own) ---------- */
+
+function readStoredShodanKey() {
+  try {
+    return localStorage.getItem(SHODAN_KEY_STORAGE) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeShodanKey(value) {
+  try {
+    if (value) localStorage.setItem(SHODAN_KEY_STORAGE, value);
+    else localStorage.removeItem(SHODAN_KEY_STORAGE);
+  } catch {
+    /* storage unavailable — the key still works for this page load */
+  }
+}
+
+function refreshShodanUi(message = "") {
+  const active = SHODAN_KEY_PATTERN.test(shodanKey);
+  const badge = document.querySelector("#optionsBadge");
+  if (badge) badge.hidden = !active;
+  const input = document.querySelector("#shodanKey");
+  if (input) input.value = shodanKey;
+  const status = document.querySelector("#shodanKeyStatus");
+  if (status) status.textContent = message;
+}
+
+function saveShodanKey() {
+  const input = document.querySelector("#shodanKey");
+  const value = (input?.value ?? "").trim();
+  if (!value) {
+    shodanKey = "";
+    storeShodanKey("");
+    refreshShodanUi("Key cleared.");
+    return;
+  }
+  if (!SHODAN_KEY_PATTERN.test(value)) {
+    refreshShodanUi("That does not look like a Shodan key (expected 16–64 letters or digits).");
+    return;
+  }
+  shodanKey = value;
+  const remember = document.querySelector("#rememberShodanKey")?.checked === true;
+  storeShodanKey(remember ? value : "");
+  refreshShodanUi(remember ? "Saved in this browser." : "Set for this page only — not remembered.");
+}
+
+function initShodanKey() {
+  const stored = readStoredShodanKey();
+  if (stored && SHODAN_KEY_PATTERN.test(stored)) {
+    shodanKey = stored;
+    document.querySelector("#rememberShodanKey").checked = true;
+  }
+  refreshShodanUi();
 }
 
 /* ---------- history (browser only) ---------- */
@@ -454,7 +516,16 @@ function renderNetwork(data, tcp) {
   setText("#activePortNote", tcp?.reason ?? "TCP connect from the checker's edge network.", "");
 
   addTokens(document.querySelector("#passivePorts"), (network.observedPorts ?? []).map((port) => `:${port}`), "No passive dataset (requires a Shodan key)");
-  setText("#passivePortNote", network.portSourceAvailable ? "Historical third-party observations, not a live scan." : "Configure a Shodan API key to include passive port observations.", "");
+  const shodanSource = network.shodanSource;
+  setText(
+    "#passivePortNote",
+    shodanSource === "client"
+      ? "Historical third-party observations via your Shodan key, not a live scan."
+      : shodanSource === "server"
+        ? "Historical third-party observations via the server's Shodan key, not a live scan."
+        : "Add a Shodan API key under Options to include passive port observations.",
+    "",
+  );
   addTokens(document.querySelector("#serviceRecords"), network.services);
 }
 
@@ -613,9 +684,11 @@ async function runLookup(target) {
   try {
     let response;
     try {
+      const headers = { "Content-Type": "application/json" };
+      if (SHODAN_KEY_PATTERN.test(shodanKey)) headers["X-Shodan-Key"] = shodanKey;
       response = await fetch(`${apiBase()}/api/lookup`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ target: value, captureBody: document.querySelector("#captureBody")?.checked === true }),
       });
     } catch {
@@ -684,6 +757,20 @@ document.querySelector("#exportTxt")?.addEventListener("click", () => {
 
 /* ---------- boot ---------- */
 
+document.querySelector("#saveShodanKey")?.addEventListener("click", saveShodanKey);
+document.querySelector("#clearShodanKey")?.addEventListener("click", () => {
+  shodanKey = "";
+  storeShodanKey("");
+  refreshShodanUi("Key cleared.");
+});
+document.querySelector("#toggleKeyVisibility")?.addEventListener("click", (event) => {
+  const field = document.querySelector("#shodanKey");
+  const showing = field.type === "text";
+  field.type = showing ? "password" : "text";
+  event.currentTarget.textContent = showing ? "Show" : "Hide";
+});
+
+initShodanKey();
 renderHistory();
 const initial = new URLSearchParams(location.search).get("target");
 if (initial) {

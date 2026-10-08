@@ -43,7 +43,7 @@ Stages start concurrently; TCP and enrichment await only the DNS step. Every non
 - Extra TCP ports beyond `80`/`443` require explicit operator opt-in via `EXTRA_PORTS`.
 - The displayed source IP is the visitor's `CF-Connecting-IP` observed at the edge. It is a label, not a probe origin: the probes egress from the checker's network.
 - No CORS wildcard, query logging, user-supplied request headers, response-body storage, or crawl is implemented.
-- API keys stay in Worker secrets. The client never receives the Shodan key.
+- API keys stay in Worker secrets. The client never receives the server's Shodan key. A caller may bring their own key via the `X-Shodan-Key` header; that value is used for the single request only, is never cached (so it cannot leak between callers), never persisted, never logged, and never returned.
 - An isolate-local rate limit is only defense in depth; deployment operators must configure Cloudflare's edge rate limiting.
 
 ## Known limits

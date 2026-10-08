@@ -110,6 +110,17 @@ npx wrangler secret put SHODAN_API_KEY
 
 The key is never sent to the browser. Without it, the app still uses DNS, RDAP, and Team Cymru's public ASN-over-DNS response. Respect each provider's terms and rate limits.
 
+### Bring your own Shodan key
+
+Users can supply their own key from the dashboard's **Options** dropdown instead of relying on a server-configured one. The key is sent as an `X-Shodan-Key` request header and used for that request only:
+
+- never written to storage, logs, or the cache — and **never memoised**, so one caller's key can never serve another caller's results
+- never echoed in a response or in a source URL
+- held in memory by default; only saved to `localStorage` if the user ticks *Remember in this browser*
+- format-checked before use; a malformed value is ignored rather than forwarded
+
+Because this is a caller-supplied secret transiting the Worker, the Worker must be trusted with it — a self-hosted deployment keeps that trust boundary entirely inside your own account.
+
 ## Sources and limitations
 
 - **DNS:** Cloudflare DNS-over-HTTPS.

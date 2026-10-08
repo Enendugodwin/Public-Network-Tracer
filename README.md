@@ -27,7 +27,7 @@ One lookup runs live reachability checks and pairs them with public data:
 | TCP `80`, `443` | Always | "Can we reach the site?" |
 | Response body | Off | Dashboard toggle; switches to `GET`, first 16 KB |
 | Extra TCP ports | Off | Opt in via `EXTRA_PORTS` |
-| Shodan host data | Off | Opt in via `SHODAN_API_KEY` |
+| Shodan host data | Off | Server key via `SHODAN_API_KEY`, or bring your own in the dashboard's **Options** |
 
 ### Reading the response body
 

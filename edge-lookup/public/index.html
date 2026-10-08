@@ -54,6 +54,24 @@
             <p class="search-hint">One request · public data only · nothing stored server-side</p>
           </div>
         </div>
+        <details class="options-panel" id="optionsPanel">
+          <summary>Options <span id="optionsBadge" class="options-badge" hidden>Shodan key active</span></summary>
+          <div class="options-body">
+            <label class="options-label" for="shodanKey">Shodan API key <span class="options-hint">optional — enables passive ports, services and certificates</span></label>
+            <div class="key-row">
+              <input id="shodanKey" type="password" autocomplete="off" spellcheck="false" placeholder="your Shodan API key" aria-describedby="shodanKeyNote" />
+              <button type="button" class="ghost-button" id="toggleKeyVisibility">Show</button>
+              <button type="button" class="ghost-button" id="saveShodanKey">Save</button>
+              <button type="button" class="ghost-button" id="clearShodanKey">Clear</button>
+            </div>
+            <label class="body-toggle" for="rememberShodanKey">
+              <input type="checkbox" id="rememberShodanKey" />
+              <span>Remember in this browser</span>
+            </label>
+            <p id="shodanKeyNote" class="micro-note">Used only for your own lookups and sent straight to Shodan through this Worker. Never stored on the server, logged, cached, or returned in a response. <a href="https://account.shodan.io" target="_blank" rel="noopener noreferrer">Get a key</a>.</p>
+            <p id="shodanKeyStatus" class="form-status" role="status" aria-live="polite"></p>
+          </div>
+        </details>
         <p id="formStatus" class="form-status" role="status" aria-live="polite"></p>
 
         <div id="historyBlock" class="history" hidden>

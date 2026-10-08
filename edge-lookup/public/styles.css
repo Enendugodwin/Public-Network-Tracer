@@ -62,6 +62,20 @@ h1 span { color: #64758f; font-weight: 400; }
 .body-toggle { display: inline-flex; align-items: center; gap: 6px; color: #5b6a80; font-size: 11px; cursor: pointer; }
 .body-toggle input { width: 14px; height: 14px; accent-color: var(--blue); cursor: pointer; }
 .body-preview { max-height: 260px; margin: 10px 0 0; padding: 11px 12px; overflow: auto; border: 1px solid #e4eaf3; border-radius: 8px; background: #f8faff; color: #3c4d66; font-family: 'DM Mono', ui-monospace, monospace; font-size: 10px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.options-panel { width: min(100%, 760px); margin: 14px auto 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-align: left; }
+.options-panel > summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; color: #5a6a80; font-size: 11px; font-weight: 600; list-style: none; }
+.options-panel > summary::-webkit-details-marker { display: none; }
+.options-panel > summary::before { content: '▸'; color: #9aa7b8; font-size: 10px; }
+.options-panel[open] > summary::before { content: '▾'; }
+.options-panel > summary:hover { color: var(--blue); }
+.options-badge { padding: 2px 7px; border-radius: 999px; background: #eaf7f1; color: #12744f; font-family: 'DM Mono', monospace; font-size: 8px; letter-spacing: .5px; }
+.options-body { padding: 0 14px 14px; border-top: 1px solid #eef2f7; }
+.options-label { display: block; margin: 12px 0 6px; color: #3d4f6b; font-size: 11px; font-weight: 600; }
+.options-hint { color: #93a0b1; font-weight: 400; }
+.key-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.key-row input { flex: 1 1 220px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: #263851; font-family: 'DM Mono', monospace; font-size: 11px; }
+.key-row input:focus-visible { border-color: #7894db; }
+.options-panel .body-toggle { margin-top: 10px; }
 .form-status { min-height: 20px; margin: 8px 0 0; color: var(--red); font-size: 12px; }
 .form-status.success { color: var(--green); }
 .results { margin: 42px 0 0; }

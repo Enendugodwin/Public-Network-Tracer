@@ -78,7 +78,7 @@ function corsHeaders(request: Request, env: Pick<Env, "ALLOWED_ORIGIN">): Record
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-Shodan-Key",
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
   };
@@ -561,7 +561,7 @@ function rdapForDomain(domain: string): Promise<{ registrar: string | null; name
   });
 }
 
-function shodanForIp(ip: string, apiKey?: string): Promise<{
+function shodanForIp(ip: string, apiKey?: string, cacheable = true): Promise<{
   ports: number[];
   services: string[];
   certificates: Array<{ sha256: string; subject: string | null; issuer: string | null; expiresAt: string | null }>;
@@ -570,7 +570,9 @@ function shodanForIp(ip: string, apiKey?: string): Promise<{
   source: SourceCitation;
 } | null> {
   if (!apiKey) return Promise.resolve(null);
-  return cached(`shodan:${ip}`, async () => {
+  // A caller-supplied key must never share a cache entry with another caller's
+  // results, so it is never memoised.
+  const load = async () => {
     const url = `https://api.shodan.io/shodan/host/${encodeURIComponent(ip)}?key=${encodeURIComponent(apiKey)}`;
     try {
       const data = await fetchJson(url) as any;
@@ -607,12 +609,13 @@ function shodanForIp(ip: string, apiKey?: string): Promise<{
         certificates,
         organization: typeof data?.org === "string" ? data.org.slice(0, 160) : null,
         os: typeof data?.os === "string" ? data.os.slice(0, 100) : null,
-        source: citation("Shodan Host API", `https://api.shodan.io/shodan/host/${encodeURIComponent(ip)}`, 90),
+        source: citation("Shodan Host API", `https://api.shodan.io/shodan/host/${encodeURIComponent(ip)}`, 90, "passive"),
       };
     } catch {
       return null;
     }
-  });
+  };
+  return cacheable ? cached(`shodan:${ip}`, load) : load();
 }
 
 function allowedByCidr(ip: string, cidrs: string | undefined): boolean {
@@ -769,6 +772,20 @@ function clientPublicIp(request: Request): string | null {
   return blockedAddress(address) ? null : address;
 }
 
+type ShodanKeyInfo = { key?: string; source: "client" | "server" | "none" };
+
+/**
+ * A caller may bring their own Shodan key. It is used for that request only:
+ * never persisted, never logged, never echoed back, and never cached, so one
+ * caller's key can never serve another caller's results.
+ */
+function shodanKeyFor(request: Request, env: Pick<Env, "SHODAN_API_KEY">): ShodanKeyInfo {
+  const supplied = request.headers.get("X-Shodan-Key")?.trim();
+  if (supplied && /^[A-Za-z0-9]{16,64}$/.test(supplied)) return { key: supplied, source: "client" };
+  if (env.SHODAN_API_KEY) return { key: env.SHODAN_API_KEY, source: "server" };
+  return { source: "none" };
+}
+
 function probePorts(env: Pick<Env, "EXTRA_PORTS">): number[] {
   const extra = (env.EXTRA_PORTS ?? "")
     .split(",")
@@ -875,14 +892,14 @@ type Enrichment = {
   reverseDns: string[];
 };
 
-async function enrichTarget(target: NormalizedTarget, ip: string | undefined, env: Env): Promise<Enrichment> {
+async function enrichTarget(target: NormalizedTarget, ip: string | undefined, env: Env, shodanKey: ShodanKeyInfo): Promise<Enrichment> {
   const asnLookup = ip ? lookupAsn(ip).catch(() => null) : Promise.resolve(null);
   const ptrLookup = ip ? queryDns(reverseNameFor(ip), "PTR").catch(() => null) : Promise.resolve(null);
   const [ipRdap, asnResult, asnRdap, shodan, domainRdap, ptr] = await Promise.all([
     ip ? rdapForIp(ip) : Promise.resolve(null),
     asnLookup,
     asnLookup.then((result) => (result ? rdapForAsn(result.info.asn).catch(() => null) : null)),
-    ip ? shodanForIp(ip, env.SHODAN_API_KEY) : Promise.resolve(null),
+    ip ? shodanForIp(ip, shodanKey.key, shodanKey.source !== "client") : Promise.resolve(null),
     target.kind === "domain" ? rdapForDomain(target.host) : Promise.resolve(null),
     ptrLookup,
   ]);
@@ -1360,13 +1377,13 @@ function buildPosture(context: { http: any; dns: Record<string, string[]>; netwo
   return { score: adjusted, max: 100, grade, categories };
 }
 
-async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | null, captureBody = false): Promise<Record<string, unknown>> {
+async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | null, captureBody = false, shodanKey: ShodanKeyInfo = { source: "none" }): Promise<Record<string, unknown>> {
   // Overlap the independent work: HTTP does not need DNS, and TCP/enrichment
   // start as soon as the address is known rather than after the other stages.
   const resolution = resolveTarget(target);
   const httpPromise = probeHttp(target, captureBody);
   const tcpPromise = resolution.then((r) => probeTcp(target, env, r.ip));
-  const enrichmentPromise = resolution.then((r) => enrichTarget(target, r.ip, env));
+  const enrichmentPromise = resolution.then((r) => enrichTarget(target, r.ip, env, shodanKey));
 
   const [resolved, http, tcpRaw, enrichment] = await Promise.all([resolution, httpPromise, tcpPromise, enrichmentPromise]);
   const tcp = reconcileTcp(http, tcpRaw);
@@ -1397,7 +1414,8 @@ async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | n
     observedPorts: shodan?.ports ?? null,
     services: shodan?.services ?? null,
     certificates: shodan?.certificates ?? null,
-    portSourceAvailable: Boolean(env.SHODAN_API_KEY),
+    portSourceAvailable: Boolean(shodanKey.key),
+    shodanSource: shodanKey.source,
   };
 
   const registration = domainRdap ? { registrar: domainRdap.registrar, nameservers: domainRdap.nameservers, events: domainRdap.events } : null;
@@ -1470,7 +1488,7 @@ export default {
       if (captureBody && bodyCaptureLimited(request)) {
         return respond({ error: "Response-body limit reached. Try again in a minute." }, 429);
       }
-      const result = await doLookup(target, env, clientPublicIp(request), captureBody);
+      const result = await doLookup(target, env, clientPublicIp(request), captureBody, shodanKeyFor(request, env));
       return respond(result);
     } catch (error) {
       if (error instanceof LookupError) return respond({ error: error.message }, error.status);

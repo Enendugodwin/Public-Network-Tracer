@@ -332,7 +332,84 @@ describe("lookup API", () => {
     expect(body.diagnosis.evidence.join(" ")).toMatch(/not measurable/i);
   });
 
-  describe("response body capture", () => {    function stubFetch(handler: (url: string, method: string) => Response) {
+  describe("caller-supplied Shodan key", () => {
+    const KEY = "abcdef1234567890abcdef1234567890";
+    let clientSeq = 0;
+
+    function stubShodan() {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const method = init?.method ?? "GET";
+        calls.push(url);
+        if (url.includes("cloudflare-dns.com")) {
+          const type = new URL(url).searchParams.get("type");
+          if (type === "TXT") return Response.json({ Answer: [{ type: 16, data: '"15169 | 8.8.8.0/24 | US | arin | 2023-12-28"' }] });
+          if (type === "A") return Response.json({ Answer: [{ type: 1, data: "8.8.8.8" }] });
+          return Response.json({ Answer: [] });
+        }
+        if (url.includes("rdap.org")) return Response.json({});
+        if (url.includes("api.shodan.io")) return Response.json({ ports: [80, 443], data: [{ port: 443, transport: "tcp", product: "nginx" }], org: "Example Co" });
+        if (method === "HEAD") return new Response(null, { status: 200, headers: { server: "fixture" } });
+        throw new Error(`Unexpected: ${url}`);
+      });
+      return calls;
+    }
+
+    function request(env: Record<string, unknown>, keyHeader?: string) {
+      const headers: Record<string, string> = { "Content-Type": "application/json", "CF-Connecting-IP": `9.9.9.${100 + (clientSeq += 1)}` };
+      if (keyHeader) headers["X-Shodan-Key"] = keyHeader;
+      return worker.fetch(
+        new Request("https://lookup.test/api/lookup", { method: "POST", headers, body: JSON.stringify({ target: "8.8.8.8" }) }),
+        { ASSETS: { fetch: async () => new Response("asset") }, ...env } as never,
+      );
+    }
+
+    it("uses the caller's key and never leaks it into the response", async () => {
+      const calls = stubShodan();
+      const response = await request({}, KEY);
+      const text = await response.text();
+      expect(calls.some((call) => call.includes("api.shodan.io") && call.includes(KEY))).toBe(true);
+      expect(text).not.toContain(KEY);
+      const body = JSON.parse(text);
+      expect(body.network.observedPorts).toEqual([80, 443]);
+      expect(body.network.shodanSource).toBe("client");
+      expect(body.network.portSourceAvailable).toBe(true);
+    });
+
+    it("never caches results fetched with a caller-supplied key", async () => {
+      const calls = stubShodan();
+      await request({}, KEY);
+      await request({}, KEY);
+      expect(calls.filter((call) => call.includes("api.shodan.io"))).toHaveLength(2);
+    });
+
+    it("uses and caches a server-configured key when the caller sends none", async () => {
+      const calls = stubShodan();
+      await request({ SHODAN_API_KEY: KEY });
+      await request({ SHODAN_API_KEY: KEY });
+      expect(calls.filter((call) => call.includes("api.shodan.io"))).toHaveLength(1);
+    });
+
+    it("ignores a malformed key header instead of forwarding it", async () => {
+      const calls = stubShodan();
+      const body = await (await request({}, "not a key")).json() as any;
+      expect(calls.some((call) => call.includes("api.shodan.io"))).toBe(false);
+      expect(body.network.shodanSource).toBe("none");
+    });
+
+    it("allows the X-Shodan-Key header through CORS preflight", async () => {
+      installProviderMocks();
+      const response = await worker.fetch(
+        new Request("https://lookup.test/api/lookup", { method: "OPTIONS", headers: { Origin: "https://pages.example", "Access-Control-Request-Method": "POST" } }),
+        { ASSETS: { fetch: async () => new Response("asset") }, ALLOWED_ORIGIN: "https://pages.example" } as never,
+      );
+      expect(response.headers.get("Access-Control-Allow-Headers")).toContain("X-Shodan-Key");
+    });
+  });
+
+  describe("response body capture", () => {
+    function stubFetch(handler: (url: string, method: string) => Response) {
       const calls: Array<{ url: string; method: string }> = [];
       vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
         const url = input instanceof Request ? input.url : String(input);

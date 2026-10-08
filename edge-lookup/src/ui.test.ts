@@ -198,6 +198,55 @@ describe("dashboard rendering", () => {
     expect(calls).toContain("https://public-network-tracer.example.workers.dev/api/lookup");
   });
 
+  it("sends a user-supplied Shodan key as a header, and does not remember it by default", async () => {
+    const init_headers: any[] = [];
+    vi.stubGlobal("fetch", async (_url: string | URL, init?: RequestInit) => {
+      init_headers.push(init?.headers);
+      return Response.json(fixture());
+    });
+
+    (document.querySelector("#shodanKey") as HTMLInputElement).value = "abcdef1234567890abcdef1234567890";
+    (document.querySelector("#saveShodanKey") as HTMLButtonElement).click();
+    expect(document.querySelector("#optionsBadge")?.hasAttribute("hidden")).toBe(false);
+
+    await submitLookup("example.com");
+    await vi.waitFor(() => expect(document.querySelector("#sumStatus")?.textContent).toContain("200"));
+
+    const sent = init_headers.find((headers) => headers && headers["X-Shodan-Key"]);
+    expect(sent?.["X-Shodan-Key"]).toBe("abcdef1234567890abcdef1234567890");
+    // Not remembered unless the user asked for it.
+    expect(localStorage.getItem("pit.shodanKey.v1")).toBeNull();
+  });
+
+  it("remembers the Shodan key only when asked", async () => {
+    vi.stubGlobal("fetch", async () => Response.json(fixture()));
+    (document.querySelector("#shodanKey") as HTMLInputElement).value = "abcdef1234567890abcdef1234567890";
+    (document.querySelector("#rememberShodanKey") as HTMLInputElement).checked = true;
+    (document.querySelector("#saveShodanKey") as HTMLButtonElement).click();
+    expect(localStorage.getItem("pit.shodanKey.v1")).toBe("abcdef1234567890abcdef1234567890");
+
+    (document.querySelector("#clearShodanKey") as HTMLButtonElement).click();
+    expect(localStorage.getItem("pit.shodanKey.v1")).toBeNull();
+    expect(document.querySelector("#optionsBadge")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("rejects a malformed Shodan key and sends no header", async () => {
+    const init_headers: any[] = [];
+    vi.stubGlobal("fetch", async (_url: string | URL, init?: RequestInit) => {
+      init_headers.push(init?.headers);
+      return Response.json(fixture());
+    });
+
+    (document.querySelector("#shodanKey") as HTMLInputElement).value = "not a real key";
+    (document.querySelector("#saveShodanKey") as HTMLButtonElement).click();
+    expect(document.querySelector("#shodanKeyStatus")?.textContent).toMatch(/does not look like/i);
+    expect(document.querySelector("#optionsBadge")?.hasAttribute("hidden")).toBe(true);
+
+    await submitLookup("example.com");
+    await vi.waitFor(() => expect(document.querySelector("#sumStatus")?.textContent).toContain("200"));
+    expect(init_headers.some((headers) => headers && headers["X-Shodan-Key"])).toBe(false);
+  });
+
   it("records recent lookups in localStorage and clears them", async () => {
     vi.stubGlobal("fetch", async (url: string | URL) => {
       const value = String(url);
