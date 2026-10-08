@@ -22,13 +22,17 @@ type SourceCitation = {
   publishedAt: string | null;
   contentSha256: string | null;
   confidence: number;
+  /** live = this request observed it; passive = third-party dataset; cached = memoised public lookup. */
+  kind?: "live" | "passive" | "cached";
+  freshness?: string;
 };
 
 const MAX_BODY_BYTES = 8_192;
 const MAX_UPSTREAM_BYTES = 512_000;
 const MAX_CAPTURE_BYTES = 16_384;
 const MAX_REDIRECTS = 4;
-const MAX_LOOKUPS_PER_MINUTE = 12;
+const MAX_LOOKUPS_PER_MINUTE = 30;
+const MAX_BODY_CAPTURES_PER_MINUTE = 10;
 const REQUEST_TIMEOUT_MS = 5_000;
 const RATE_WINDOW_MS = 60_000;
 const rateWindows = new Map<string, { start: number; count: number }>();
@@ -262,8 +266,18 @@ export function normalizeTarget(input: string): NormalizedTarget {
 }
 
 function rateLimited(request: Request): boolean {
+  const client = request.headers.get("CF-Connecting-IP") ?? "unknown-client";
+  return consumeRate(`lookup:${client}`, MAX_LOOKUPS_PER_MINUTE);
+}
+
+/** Independent bucket so the expensive body path cannot exhaust the normal budget. */
+function bodyCaptureLimited(request: Request): boolean {
+  const client = request.headers.get("CF-Connecting-IP") ?? "unknown-client";
+  return consumeRate(`body:${client}`, MAX_BODY_CAPTURES_PER_MINUTE);
+}
+
+function consumeRate(key: string, limit: number): boolean {
   const now = Date.now();
-  const key = request.headers.get("CF-Connecting-IP") ?? "unknown-client";
   let window = rateWindows.get(key);
   if (!window || now - window.start >= RATE_WINDOW_MS) {
     window = { start: now, count: 0 };
@@ -271,12 +285,12 @@ function rateLimited(request: Request): boolean {
   }
   window.count += 1;
 
-  if (rateWindows.size > 2_000) {
+  if (rateWindows.size > 4_000) {
     for (const [entry, value] of rateWindows) {
       if (now - value.start >= RATE_WINDOW_MS) rateWindows.delete(entry);
     }
   }
-  return window.count > MAX_LOOKUPS_PER_MINUTE;
+  return window.count > limit;
 }
 
 async function readBounded(stream: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<Uint8Array> {
@@ -414,26 +428,60 @@ async function fetchJson(url: string, accept = "application/json"): Promise<unkn
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-function citation(name: string, url: string, confidence = 95): SourceCitation {
-  return { name, url, collectedAt: new Date().toISOString(), publishedAt: null, contentSha256: null, confidence };
+function citation(name: string, url: string, confidence = 95, kind: SourceCitation["kind"] = "cached"): SourceCitation {
+  return {
+    name,
+    url,
+    collectedAt: new Date().toISOString(),
+    publishedAt: null,
+    contentSha256: null,
+    confidence,
+    kind,
+    freshness: kind === "live" ? "live" : kind === "passive" ? "third-party dataset" : `cached ≤ ${Math.round(CACHE_TTL_MS / 1000)}s`,
+  };
 }
 
 type DnsAnswer = { name?: string; type?: number; data?: string };
 
-function dnsAnswers(domain: string, type: "A" | "AAAA"): Promise<{ records: string[]; blockedAnswer: boolean; source: SourceCitation }> {
-  return cached(`dns:${type}:${domain}`, async () => {
-    const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`;
-    const result = await fetchJson(url, "application/dns-json") as { Answer?: DnsAnswer[] };
+type DnsType = "A" | "AAAA" | "CNAME" | "MX" | "NS" | "TXT" | "CAA" | "SOA" | "PTR";
+
+const DNS_TYPE_CODES: Record<DnsType, number> = { A: 1, NS: 2, CNAME: 5, SOA: 6, PTR: 12, MX: 15, TXT: 16, AAAA: 28, CAA: 257 };
+
+function stripQuotes(value: string): string {
+  return value.replace(/^"|"$/g, "").replace(/\\"/g, '"');
+}
+
+/** Generic DoH lookup. Returns raw record strings plus the validated-data flag. */
+function queryDns(name: string, type: DnsType): Promise<{ records: string[]; blockedAnswer: boolean; validated: boolean; source: SourceCitation }> {
+  return cached(`dns:${type}:${name}`, async () => {
+    const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`;
+    const result = await fetchJson(url, "application/dns-json") as { Answer?: DnsAnswer[]; AD?: boolean };
+    const code = DNS_TYPE_CODES[type];
     const answers = (result.Answer ?? [])
-      .filter((answer) => answer.type === (type === "A" ? 1 : 28) && typeof answer.data === "string")
-      .map((answer) => answer.data!)
-      .filter((value) => ipaddr.isValid(value));
+      .filter((answer) => answer.type === code && typeof answer.data === "string")
+      .map((answer) => answer.data!);
+    const addressRecords = type === "A" || type === "AAAA";
+    const usable = addressRecords ? answers.filter((value) => ipaddr.isValid(value)) : answers;
     return {
-      records: answers.filter((value) => !blockedAddress(value)),
-      blockedAnswer: answers.some(blockedAddress),
-      source: citation("Cloudflare DNS over HTTPS", url),
+      // Private/reserved answers are never surfaced; they only set the flag that
+      // stops the probe. Everything else for these two types is public.
+      records: (type === "TXT" ? usable.map(stripQuotes) : usable.filter((value) => !addressRecords || !blockedAddress(value))).slice(0, 24),
+      blockedAnswer: addressRecords && usable.some(blockedAddress),
+      validated: result.AD === true,
+      source: citation(`Cloudflare DoH ${type}`, url),
     };
   });
+}
+
+function dnsAnswers(domain: string, type: "A" | "AAAA"): Promise<{ records: string[]; blockedAnswer: boolean; source: SourceCitation }> {
+  return queryDns(domain, type);
+}
+
+function reverseNameFor(ip: string): string {
+  const address = ipaddr.process(ip);
+  if (address.kind() === "ipv4") return `${address.toString().split(".").reverse().join(".")}.in-addr.arpa`;
+  const hex = (address as ipaddr.IPv6).toByteArray().map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.split("").reverse().join(".")}.ip6.arpa`;
 }
 
 function reverseIpForCymru(ip: string): string {
@@ -598,7 +646,7 @@ function safeRedirectUrl(location: string, current: URL): URL | null {
 
 async function probeHttp(initial: NormalizedTarget, captureBody = false): Promise<Record<string, unknown>> {
   let current = new URL(initial.url);
-  const redirects: string[] = [];
+  const redirects: Array<{ status: number; from: string; to: string }> = [];
   let startedAt: number | null = null;
   for (let step = 0; step <= MAX_REDIRECTS; step += 1) {
     const ip = ipaddr.isValid(current.hostname.replace(/^\[|\]$/g, ""))
@@ -629,7 +677,7 @@ async function probeHttp(initial: NormalizedTarget, captureBody = false): Promis
         if (step === MAX_REDIRECTS) return failure("REDIRECT_LIMIT", { redirects });
         const next = safeRedirectUrl(location, current);
         if (!next) return failure("REDIRECT_UNSUPPORTED", { redirects });
-        redirects.push(next.origin);
+        redirects.push({ status: response.status, from: current.toString(), to: next.toString() });
         current = next;
         continue;
       }
@@ -639,19 +687,24 @@ async function probeHttp(initial: NormalizedTarget, captureBody = false): Promis
         status: "complete",
         statusCode: response.status,
         statusText: response.statusText,
+        method: captureBody ? "GET" : "HEAD",
+        requestUrl: initial.url.toString(),
+        finalUrl: current.toString(),
         responseTimeMs: Date.now() - startedAt,
         contentLength: parseContentLength(response.headers.get("content-length")),
         server: response.headers.get("server")?.slice(0, 120) ?? null,
         edge: detectEdge(response.headers),
+        headerAnalysis: analyzeHeaders(response.headers),
         headers: Object.fromEntries(["content-type", "cache-control", "last-modified", "strict-transport-security", "x-content-type-options", "x-frame-options", "cf-mitigated", "x-amzn-waf-action", "x-sucuri-id", "retry-after", "via", "x-cache"]
           .map((name) => [name, response.headers.get(name)?.slice(0, 240) ?? null])
           .filter((entry): entry is [string, string] => entry[1] !== null)),
         tls: current.protocol === "https:" ? { enabled: true, version: null } : { enabled: false, version: null },
         redirected: redirects.length > 0,
+        redirectCount: redirects.length,
         redirects,
         body,
         checkedAt: new Date().toISOString(),
-        source: citation(captureBody ? "Live HTTP GET check" : "Live HTTP HEAD check", current.origin, 100),
+        source: citation(captureBody ? "Live HTTP GET check" : "Live HTTP HEAD check", current.origin, 100, "live"),
       };
     } catch (error) {
       return failure(classifyFetchError(error), { redirects, responseTimeMs: startedAt === null ? null : Date.now() - startedAt });
@@ -671,27 +724,36 @@ type CapturedBody = {
   bytesRead: number;
   truncated: boolean;
   textual: boolean;
+  skipped: boolean;
   title: string | null;
   markers: string[];
   text: string | null;
 };
 
 /**
- * Read a bounded prefix of the response body for display. Never persisted, and
- * only the first MAX_CAPTURE_BYTES are kept; binary types are not decoded.
+ * Read a bounded prefix of the response body for display. Only the first
+ * MAX_CAPTURE_BYTES are kept, only allowlisted textual types are read at all,
+ * and nothing is ever persisted.
  */
 async function captureResponseBody(response: Response): Promise<CapturedBody> {
   const contentType = response.headers.get("content-type");
-  const { bytes, truncated } = await readBoundedPrefix(response.body, MAX_CAPTURE_BYTES);
   const textual = TEXTUAL_CONTENT.test(contentType ?? "");
-  const text = textual ? new TextDecoder("utf-8").decode(bytes) : null;
+
+  if (!textual) {
+    await response.body?.cancel();
+    return { contentType: contentType?.slice(0, 160) ?? null, bytesRead: 0, truncated: false, textual: false, skipped: true, title: null, markers: [], text: null };
+  }
+
+  const { bytes, truncated } = await readBoundedPrefix(response.body, MAX_CAPTURE_BYTES);
+  const text = new TextDecoder("utf-8").decode(bytes);
   return {
     contentType: contentType?.slice(0, 160) ?? null,
     bytesRead: bytes.byteLength,
     truncated,
-    textual,
-    title: text ? extractTitle(text) : null,
-    markers: text ? [...new Set(CHALLENGE_MARKERS.filter((marker) => marker.pattern.test(text)).map((marker) => marker.label))] : [],
+    textual: true,
+    skipped: false,
+    title: extractTitle(text),
+    markers: [...new Set(CHALLENGE_MARKERS.filter((marker) => marker.pattern.test(text)).map((marker) => marker.label))],
     text,
   };
 }
@@ -750,6 +812,9 @@ async function probeTcpPort(host: string, port: number): Promise<TcpCheck> {
 
 async function probeTcp(target: NormalizedTarget, env: Env, ip: string | undefined): Promise<Record<string, unknown>> {
   const host = ip ?? target.host;
+  if (!ipaddr.isValid(host)) {
+    return { status: "not_run", reason: "No public address was resolved, so TCP checks were skipped.", checks: [] };
+  }
   if (blockedAddress(host)) return blocked("PRIVATE_ADDRESS", { checks: [] });
   const ports = probePorts(env);
   const checks = await Promise.all(ports.map((port) => probeTcpPort(host, port)));
@@ -763,23 +828,40 @@ type DnsResolution = {
   sources: SourceCitation[];
 };
 
+const DISPLAY_DNS_TYPES: DnsType[] = ["CNAME", "MX", "NS", "TXT", "CAA", "SOA"];
+
 async function resolveTarget(target: NormalizedTarget): Promise<DnsResolution> {
   if (target.kind !== "domain") {
     return { ip: target.ip, dns: {}, privateDnsAnswersFiltered: false, sources: [] };
   }
-  const types = ["A", "AAAA"] as const;
+  const addressTypes = ["A", "AAAA"] as const;
   const dns: Record<string, string[]> = {};
   const sources: SourceCitation[] = [];
   let privateDnsAnswersFiltered = false;
+  let validated = false;
 
-  const results = await Promise.allSettled(types.map((type) => dnsAnswers(target.host, type)));
-  results.forEach((result, index) => {
+  // Address records stay on the critical path; the rest only feed the display.
+  const [addressResults, displayResults] = await Promise.all([
+    Promise.allSettled(addressTypes.map((type) => dnsAnswers(target.host, type))),
+    Promise.allSettled(DISPLAY_DNS_TYPES.map((type) => queryDns(target.host, type))),
+  ]);
+
+  addressResults.forEach((result, index) => {
     if (result.status === "fulfilled") {
-      dns[types[index]] = result.value.records;
+      dns[addressTypes[index]] = result.value.records;
       privateDnsAnswersFiltered ||= result.value.blockedAnswer;
+      validated ||= (result.value as any).validated === true;
       sources.push(result.value.source);
     }
   });
+  displayResults.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    dns[DISPLAY_DNS_TYPES[index]] = result.value.records;
+    validated ||= result.value.validated;
+    sources.push(result.value.source);
+  });
+
+  dns.dnssec = validated ? ["validated (AD flag set by resolver)"] : [];
   return { ip: dns.A?.[0] ?? dns.AAAA?.[0], dns, privateDnsAnswersFiltered, sources };
 }
 
@@ -790,16 +872,19 @@ type Enrichment = {
   ipRdap: { data: any; source: SourceCitation } | null;
   shodan: Awaited<ReturnType<typeof shodanForIp>>;
   domainRdap: Awaited<ReturnType<typeof rdapForDomain>>;
+  reverseDns: string[];
 };
 
 async function enrichTarget(target: NormalizedTarget, ip: string | undefined, env: Env): Promise<Enrichment> {
   const asnLookup = ip ? lookupAsn(ip).catch(() => null) : Promise.resolve(null);
-  const [ipRdap, asnResult, asnRdap, shodan, domainRdap] = await Promise.all([
+  const ptrLookup = ip ? queryDns(reverseNameFor(ip), "PTR").catch(() => null) : Promise.resolve(null);
+  const [ipRdap, asnResult, asnRdap, shodan, domainRdap, ptr] = await Promise.all([
     ip ? rdapForIp(ip) : Promise.resolve(null),
     asnLookup,
     asnLookup.then((result) => (result ? rdapForAsn(result.info.asn).catch(() => null) : null)),
     ip ? shodanForIp(ip, env.SHODAN_API_KEY) : Promise.resolve(null),
     target.kind === "domain" ? rdapForDomain(target.host) : Promise.resolve(null),
+    ptrLookup,
   ]);
 
   const sources: SourceCitation[] = [];
@@ -808,6 +893,7 @@ async function enrichTarget(target: NormalizedTarget, ip: string | undefined, en
   if (asnRdap) sources.push(asnRdap.source);
   if (shodan) sources.push(shodan.source);
   if (domainRdap) sources.push(domainRdap.source);
+  if (ptr) sources.push(ptr.source);
 
   return {
     sources,
@@ -816,6 +902,7 @@ async function enrichTarget(target: NormalizedTarget, ip: string | undefined, en
     ipRdap,
     shodan,
     domainRdap,
+    reverseDns: ptr?.records ?? [],
   };
 }
 
@@ -968,6 +1055,311 @@ function diagnose(http: any, tcp: any): Diagnosis {
   }
 }
 
+const SECURITY_HEADERS: Array<{ name: string; label: string; weight: number; why: string; recommendation: string }> = [
+  { name: "strict-transport-security", label: "Strict-Transport-Security", weight: 3, why: "Tells browsers to use HTTPS for future visits, preventing downgrade and cookie-hijacking attacks.", recommendation: "Send with a long max-age (e.g. 31536000) and includeSubDomains once you are sure." },
+  { name: "content-security-policy", label: "Content-Security-Policy", weight: 3, why: "Restricts which scripts and resources the page can load, limiting the impact of cross-site scripting.", recommendation: "Deploy in report-only mode first, then enforce with a nonce or hash for scripts." },
+  { name: "x-content-type-options", label: "X-Content-Type-Options", weight: 1, why: "Stops browsers from MIME-sniffing a response away from its declared type.", recommendation: "Set to nosniff." },
+  { name: "x-frame-options", label: "X-Frame-Options", weight: 1, why: "Prevents the page being framed, which mitigates clickjacking.", recommendation: "Set DENY or SAMEORIGIN, or use CSP frame-ancestors instead." },
+  { name: "referrer-policy", label: "Referrer-Policy", weight: 1, why: "Limits how much URL information is leaked to third parties.", recommendation: "Set strict-origin-when-cross-origin or stricter." },
+  { name: "permissions-policy", label: "Permissions-Policy", weight: 1, why: "Restricts access to powerful browser features such as camera and geolocation.", recommendation: "Explicitly disable features the site does not use." },
+  { name: "cross-origin-opener-policy", label: "Cross-Origin-Opener-Policy", weight: 1, why: "Isolates the browsing context from cross-origin windows.", recommendation: "Set same-origin where compatibility allows." },
+];
+
+const CACHING_HEADERS = ["cache-control", "etag", "last-modified", "age", "expires"];
+const APPLICATION_HEADERS = ["content-type", "content-encoding", "server", "via", "x-powered-by", "cf-cache-status"];
+
+function briefHeaders(headers: Headers, names: string[]): Record<string, string> {
+  return Object.fromEntries(
+    names
+      .map((name) => [name, headers.get(name)?.slice(0, 240) ?? null] as const)
+      .filter((entry): entry is [string, string] => entry[1] !== null),
+  );
+}
+
+function analyzeHeaders(headers: Headers): {
+  security: { present: Array<{ name: string; label: string; value: string }>; missing: Array<{ name: string; label: string; why: string; recommendation: string }>; score: number; max: number };
+  caching: Record<string, string>;
+  application: Record<string, string>;
+} {
+  const present = [];
+  const missing = [];
+  let score = 0;
+  let max = 0;
+  for (const spec of SECURITY_HEADERS) {
+    max += spec.weight;
+    const value = headers.get(spec.name);
+    if (value) {
+      score += spec.weight;
+      present.push({ name: spec.name, label: spec.label, value: value.slice(0, 240) });
+    } else {
+      missing.push({ name: spec.name, label: spec.label, why: spec.why, recommendation: spec.recommendation });
+    }
+  }
+  return { security: { present, missing, score, max }, caching: briefHeaders(headers, CACHING_HEADERS), application: briefHeaders(headers, APPLICATION_HEADERS) };
+}
+
+type Finding = {
+  id: string;
+  severity: "high" | "medium" | "low" | "info";
+  title: string;
+  detail: string;
+  why: string;
+  recommendation: string;
+  evidence: string[];
+  source: string;
+};
+
+const HOSTING_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /cloudflare/i, label: "Cloudflare edge / CDN" },
+  { pattern: /amazon|aws|ec2/i, label: "Cloud hosting (AWS)" },
+  { pattern: /google|gcp/i, label: "Cloud hosting (Google)" },
+  { pattern: /microsoft|azure/i, label: "Cloud hosting (Azure)" },
+  { pattern: /fastly/i, label: "CDN (Fastly)" },
+  { pattern: /akamai/i, label: "CDN (Akamai)" },
+  { pattern: /digitalocean|linode|vultr|ovh|hetzner|leaseweb/i, label: "Hosting provider" },
+  { pattern: /comcast|verizon|at&t|bt |telefonica|deutsche telekom|vodafone|orange/i, label: "Consumer / access ISP" },
+];
+
+function hostingTypeFor(...values: Array<string | null | undefined>): string {
+  const haystack = values.filter(Boolean).join(" ");
+  if (!haystack) return "Unknown";
+  return HOSTING_PATTERNS.find((entry) => entry.pattern.test(haystack))?.label ?? "Unknown (possibly enterprise or self-hosted)";
+}
+
+function abuseContactFrom(data: any): string | null {
+  const entities: any[] = data?.entities ?? [];
+  for (const entity of entities) {
+    if (!(entity.roles ?? []).includes("abuse")) continue;
+    const vcard = entity.vcardArray?.[1] ?? [];
+    const email = vcard.find((item: any[]) => item[0] === "email")?.[3];
+    if (typeof email === "string" && email.includes("@")) return email.slice(0, 160);
+  }
+  return null;
+}
+
+function buildFindings(context: {
+  http: any;
+  dns: Record<string, string[]>;
+  network: any;
+  registration: any;
+}): Finding[] {
+  const findings: Finding[] = [];
+  const { http, dns, network, registration } = context;
+  const complete = http?.status === "complete";
+  const secure = complete && http?.tls?.enabled === true;
+  const security = http?.headerAnalysis?.security;
+  const missingNames: string[] = (security?.missing ?? []).map((entry: any) => entry.name);
+  const app = http?.headerAnalysis?.application ?? {};
+  const evidenceBase = complete ? [`HTTP ${http.statusCode}`, `source: live GET/HEAD request`] : [];
+
+  if (complete && !secure) {
+    findings.push({
+      id: "plain-http",
+      severity: "high",
+      title: "Served over plain HTTP",
+      detail: "The destination answered over HTTP without TLS, so traffic can be read and modified in transit.",
+      why: "Anything sent over HTTP — including cookies and credentials — is exposed to anyone on the path.",
+      recommendation: "Serve the site over HTTPS and redirect HTTP to it, ideally with HSTS.",
+      evidence: [...evidenceBase, `final URL: ${http.finalUrl}`],
+      source: "Live HTTP request",
+    });
+  }
+
+  if (secure && security && missingNames.includes("strict-transport-security")) {
+    findings.push({
+      id: "no-hsts",
+      severity: "medium",
+      title: "Missing Strict-Transport-Security",
+      detail: "HTTPS is available but browsers are not told to require it on future visits.",
+      why: "Without HSTS the first request on a hostile network can be downgraded or intercepted.",
+      recommendation: SECURITY_HEADERS.find((spec) => spec.name === "strict-transport-security")!.recommendation,
+      evidence: [...evidenceBase, "header: strict-transport-security absent"],
+      source: "Live HTTP request",
+    });
+  }
+
+  if (complete && missingNames.includes("content-security-policy")) {
+    findings.push({
+      id: "no-csp",
+      severity: "medium",
+      title: "Missing Content-Security-Policy",
+      detail: "No CSP is set, so the browser has no restriction on which scripts and resources may load.",
+      why: "CSP is the main defence-in-depth control against cross-site scripting and injected content.",
+      recommendation: SECURITY_HEADERS.find((spec) => spec.name === "content-security-policy")!.recommendation,
+      evidence: [...evidenceBase, "header: content-security-policy absent"],
+      source: "Live HTTP request",
+    });
+  }
+
+  if (complete && missingNames.includes("x-content-type-options")) {
+    findings.push({
+      id: "no-xcto",
+      severity: "low",
+      title: "Missing X-Content-Type-Options",
+      detail: "Responses may be MIME-sniffed rather than treated as their declared type.",
+      why: "Sniffing has historically turned harmless uploads into executable script.",
+      recommendation: "Set X-Content-Type-Options: nosniff.",
+      evidence: [...evidenceBase, "header: x-content-type-options absent"],
+      source: "Live HTTP request",
+    });
+  }
+
+  if (complete && missingNames.includes("x-frame-options")) {
+    findings.push({
+      id: "no-frame-protection",
+      severity: "low",
+      title: "No framing protection",
+      detail: "Neither X-Frame-Options nor a CSP frame-ancestors directive was observed.",
+      why: "Without framing protection the site can be embedded and used for clickjacking.",
+      recommendation: "Send X-Frame-Options: DENY, or CSP frame-ancestors 'none'.",
+      evidence: [...evidenceBase, "headers: x-frame-options and frame-ancestors absent"],
+      source: "Live HTTP request",
+    });
+  }
+
+  if (complete && app["x-powered-by"]) {
+    findings.push({
+      id: "powered-by",
+      severity: "low",
+      title: "Technology disclosed via X-Powered-By",
+      detail: `The response advertises the stack: ${app["x-powered-by"]}.`,
+      why: "Naming exact software versions helps an attacker pick a matching exploit.",
+      recommendation: "Remove X-Powered-By (or disable the framework banner).",
+      evidence: [...evidenceBase, `x-powered-by: ${app["x-powered-by"]}`],
+      source: "Live HTTP request",
+    });
+  }
+
+  if (complete && app.server) {
+    findings.push({
+      id: "server-banner",
+      severity: "info",
+      title: "Server header present",
+      detail: `The response identifies the server as "${app.server}".`,
+      why: "Informational on its own, but it narrows the set of plausible technologies.",
+      recommendation: "Consider suppressing or genericising the Server header.",
+      evidence: [...evidenceBase, `server: ${app.server}`],
+      source: "Live HTTP request",
+    });
+  }
+
+  const hoppedToHttps = (http?.redirects ?? []).some((hop: any) => String(hop.to ?? "").startsWith("https://"));
+  if (complete && hoppedToHttps) {
+    findings.push({
+      id: "http-to-https",
+      severity: "info",
+      title: "Redirects to HTTPS",
+      detail: `The request reached HTTPS after ${http.redirects.length} redirect hop(s).`,
+      why: "Good practice — but every extra hop costs latency and leaks the first request in the clear.",
+      recommendation: "Point clients at the HTTPS URL directly and reduce redirect hops.",
+      evidence: [...evidenceBase, ...(http.redirects ?? []).map((hop: any) => `${hop.status} ${hop.from} → ${hop.to}`)],
+      source: "Live HTTP request",
+    });
+  }
+
+  if ((dns.AAAA ?? []).length) {
+    findings.push({
+      id: "ipv6",
+      severity: "info",
+      title: "IPv6 enabled",
+      detail: `The name publishes ${dns.AAAA.length} AAAA record(s).`,
+      why: "Dual-stack is good for reachability and resilience.",
+      recommendation: "No action; ensure IPv6 is covered by the same controls as IPv4.",
+      evidence: [`AAAA ${(dns.AAAA ?? []).join(", ")}`, "source: Cloudflare DoH"],
+      source: "Cloudflare DoH",
+    });
+  }
+
+  if (dns.A?.length && (dns.CAA ?? []).length === 0) {
+    findings.push({
+      id: "no-caa",
+      severity: "low",
+      title: "No CAA records",
+      detail: "The domain does not restrict which certificate authorities may issue for it.",
+      why: "CAA narrows the set of CAs that can issue a certificate, reducing mis-issuance risk.",
+      recommendation: "Publish a CAA record naming only your CA(s).",
+      evidence: ["CAA: none returned", "source: Cloudflare DoH"],
+      source: "Cloudflare DoH",
+    });
+  }
+
+  if (registration?.events?.expiration) {
+    const expires = Date.parse(registration.events.expiration);
+    const days = Number.isFinite(expires) ? Math.round((expires - Date.now()) / 86_400_000) : null;
+    if (days !== null && days < 30) {
+      findings.push({
+        id: "domain-expiry",
+        severity: days < 7 ? "high" : "medium",
+        title: "Domain registration expires soon",
+        detail: `The registration expires in ${days} day(s).`,
+        why: "An expired domain can be re-registered by someone else, hijacking the identity.",
+        recommendation: "Renew the registration and enable auto-renew.",
+        evidence: [`expiration: ${registration.events.expiration}`, "source: RDAP"],
+        source: "RDAP",
+      });
+    }
+  }
+
+  if (network?.asn) {
+    findings.push({
+      id: "network-path",
+      severity: "info",
+      title: "Network attribution",
+      detail: `The address is announced by ${network.asn?.asn ?? "an unresolved network"}${network.organization ? ` (${network.organization})` : ""}.`,
+      why: "Useful for escalation: this is who to contact about routing or abuse.",
+      recommendation: "Use the abuse contact for network-level problems.",
+      evidence: [`prefix: ${network.asn?.prefix ?? network.prefix ?? "n/a"}`, `country: ${network.country ?? "n/a"}`, "source: Team Cymru / RDAP"],
+      source: "Team Cymru / RDAP",
+    });
+  }
+
+  return findings;
+}
+
+function buildPosture(context: { http: any; dns: Record<string, string[]>; network: any; findings: Finding[] }): {
+  score: number;
+  max: number;
+  grade: string;
+  categories: Array<{ name: string; score: number; max: number; note: string }>;
+} {
+  const { http, dns, network, findings } = context;
+  const complete = http?.status === "complete";
+  const secure = complete && http?.tls?.enabled === true;
+  const security = http?.headerAnalysis?.security;
+
+  const httpScore = complete ? (http.statusCode < 400 ? 20 : 10) : 0;
+  const tlsScore = secure ? (http?.redirects?.length ? 15 : 20) : 0;
+
+  const headerRatio = security && security.max ? security.score / security.max : 0;
+  const headersScore = complete ? Math.round(headerRatio * 20) : 0;
+
+  let dnsScore = 0;
+  if ((dns.A ?? []).length) dnsScore += 6;
+  if ((dns.AAAA ?? []).length) dnsScore += 4;
+  if ((dns.CAA ?? []).length) dnsScore += 4;
+  if ((dns.MX ?? []).length) dnsScore += 3;
+  if ((dns.TXT ?? []).length) dnsScore += 3;
+
+  let infraScore = 0;
+  if (network?.asn) infraScore += 8;
+  if (network?.organization) infraScore += 6;
+  if (network?.prefix) infraScore += 6;
+
+  const categories = [
+    { name: "HTTP", score: httpScore, max: 20, note: complete ? `responded ${http.statusCode}` : "no response" },
+    { name: "TLS", score: tlsScore, max: 20, note: secure ? "HTTPS in use" : "no TLS observed" },
+    { name: "Headers", score: headersScore, max: 20, note: security ? `${security.present.length}/${security.present.length + security.missing.length} security headers` : "not assessed" },
+    { name: "DNS", score: dnsScore, max: 20, note: `${(dns.A ?? []).length} A · ${(dns.AAAA ?? []).length} AAAA · ${(dns.CAA ?? []).length} CAA` },
+    { name: "Infrastructure", score: infraScore, max: 20, note: network?.asn?.asn ?? "unresolved" },
+  ];
+
+  const score = categories.reduce((total, category) => total + category.score, 0);
+  const penalty = findings.filter((finding) => finding.severity === "high").length * 4 + findings.filter((finding) => finding.severity === "medium").length * 2;
+  const adjusted = Math.max(0, Math.min(100, score - penalty));
+  const grade = adjusted >= 90 ? "A" : adjusted >= 80 ? "B" : adjusted >= 70 ? "C" : adjusted >= 60 ? "D" : "E";
+  return { score: adjusted, max: 100, grade, categories };
+}
+
 async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | null, captureBody = false): Promise<Record<string, unknown>> {
   // Overlap the independent work: HTTP does not need DNS, and TCP/enrichment
   // start as soon as the address is known rather than after the other stages.
@@ -983,16 +1375,47 @@ async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | n
   if (http.status === "complete" && http.source) sources.push(http.source as SourceCitation);
 
   const { ip, dns, privateDnsAnswersFiltered } = resolved;
-  const { asnInfo, asnOrganization, ipRdap, shodan, domainRdap } = enrichment;
+  const { asnInfo, asnOrganization, ipRdap, shodan, domainRdap, reverseDns } = enrichment;
   const organization = asnOrganization ?? shodan?.organization ?? rdapName(ipRdap?.data) ?? null;
   const country = asnInfo?.country || ipRdap?.data?.country || null;
 
+  const network = {
+    ip: ip ?? null,
+    ipVersion: ip ? (ipaddr.process(ip).kind() === "ipv4" ? "IPv4" : "IPv6") : null,
+    reverseDns: reverseDns.length ? reverseDns : null,
+    hostingType: hostingTypeFor(organization, ipRdap?.data?.name, shodan?.organization),
+    abuseContact: abuseContactFrom(ipRdap?.data),
+    asn: asnInfo,
+    prefix: asnInfo?.prefix ?? null,
+    organization,
+    country,
+    networkName: ipRdap?.data?.name ?? null,
+    range: ipRdap?.data?.startAddress && ipRdap?.data?.endAddress ? `${ipRdap.data.startAddress} – ${ipRdap.data.endAddress}` : null,
+    domain: domainRdap ? { registrar: domainRdap.registrar, nameservers: domainRdap.nameservers, events: domainRdap.events } : null,
+    dns,
+    privateDnsAnswersFiltered,
+    observedPorts: shodan?.ports ?? null,
+    services: shodan?.services ?? null,
+    certificates: shodan?.certificates ?? null,
+    portSourceAvailable: Boolean(env.SHODAN_API_KEY),
+  };
+
+  const registration = domainRdap ? { registrar: domainRdap.registrar, nameservers: domainRdap.nameservers, events: domainRdap.events } : null;
+  const findings = buildFindings({ http, dns, network, registration });
+  const posture = buildPosture({ http, dns, network, findings });
+
   return {
     target: { kind: target.kind, host: target.host, url: target.url.origin + target.url.pathname },
+    lookupSource: {
+      observedIp: sourceIp,
+      unavailableReason: sourceIp ? null : "Cloudflare sets CF-Connecting-IP at the edge. It is not present in local development (wrangler dev), so your public IP cannot be observed here.",
+      label: "Lookup source (your public IP as seen by the checker)",
+      probeOrigin: "Live HTTP and TCP checks run from the checker's edge network, not from your IP.",
+    },
     source: {
       observedIp: sourceIp,
       unavailableReason: sourceIp ? null : "Cloudflare sets CF-Connecting-IP at the edge. It is not present in local development (wrangler dev), so your public IP cannot be observed here.",
-      label: "Your public IP, as observed by the checker",
+      label: "Lookup source (your public IP as seen by the checker)",
       probeOrigin: "Live HTTP and TCP checks run from the checker's edge network, not from your IP.",
     },
     checkedAt: new Date().toISOString(),
@@ -1004,25 +1427,21 @@ async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | n
       organization,
       country,
       responseTimeMs: (http.responseTimeMs as number | null) ?? null,
+      postureScore: posture.score,
+      grade: posture.grade,
     },
     http,
     tcp,
     diagnosis: diagnose(http, tcp),
-    network: {
-      ip: ip ?? null,
-      asn: asnInfo,
-      organization,
-      country,
-      networkName: ipRdap?.data?.name ?? null,
-      range: ipRdap?.data?.startAddress && ipRdap?.data?.endAddress ? `${ipRdap.data.startAddress} – ${ipRdap.data.endAddress}` : null,
-      domain: domainRdap ? { registrar: domainRdap.registrar, nameservers: domainRdap.nameservers, events: domainRdap.events } : null,
-      dns,
-      privateDnsAnswersFiltered,
-      observedPorts: shodan?.ports ?? null,
-      services: shodan?.services ?? null,
-      certificates: shodan?.certificates ?? null,
-      portSourceAvailable: Boolean(env.SHODAN_API_KEY),
+    findings,
+    posture,
+    registration,
+    tls: {
+      enabled: (http as any)?.tls?.enabled ?? null,
+      version: null,
+      note: "Workers' fetch does not expose the negotiated TLS version or peer certificate. Certificate detail, if shown, comes from a passive dataset rather than this request.",
     },
+    network,
     sources,
   };
 }
@@ -1048,6 +1467,9 @@ export default {
 
     try {
       const { target, captureBody } = await parseRequest(request);
+      if (captureBody && bodyCaptureLimited(request)) {
+        return respond({ error: "Response-body limit reached. Try again in a minute." }, 429);
+      }
       const result = await doLookup(target, env, clientPublicIp(request), captureBody);
       return respond(result);
     } catch (error) {

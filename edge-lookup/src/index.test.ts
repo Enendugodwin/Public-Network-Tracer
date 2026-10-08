@@ -42,8 +42,12 @@ describe("lookup API", () => {
       const url = input instanceof Request ? input.url : String(input);
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       calls.push({ url, method, redirect: init?.redirect });
-      if (url.includes("cloudflare-dns.com") && new URL(url).searchParams.get("type") === "TXT") {
-        return Response.json({ Answer: [{ type: 16, data: '"15169 | 8.8.8.0/24 | US | arin | 2023-12-28"' }] });
+      if (url.includes("cloudflare-dns.com")) {
+        const type = new URL(url).searchParams.get("type");
+        if (type === "TXT") return Response.json({ Answer: [{ type: 16, data: '"15169 | 8.8.8.0/24 | US | arin | 2023-12-28"' }] });
+        if (type === "A") return Response.json({ Answer: [{ type: 1, data: "8.8.8.8" }] });
+        if (type === "AAAA") return Response.json({ Answer: [{ type: 28, data: "2001:4860:4860::8888" }] });
+        return Response.json({ Answer: [] });
       }
       if (url.includes("rdap.org/autnum/")) {
         return Response.json({ entities: [{ roles: ["registrant"], vcardArray: ["vcard", [["fn", {}, "text", "Example Network"]]] }] });
@@ -81,6 +85,10 @@ describe("lookup API", () => {
     expect(body.network.asn.country).toBe("US");
     expect(body.network.organization).toBe("Example Network");
     expect(calls.filter((call) => call.method === "HEAD")).toHaveLength(1);
+    // Regression: an object interpolated into a finding string used to render "[object Object]".
+    const networkFinding = body.findings.find((finding: any) => finding.id === "network-path");
+    expect(networkFinding.detail).toContain("AS15169");
+    expect(JSON.stringify(body.findings)).not.toContain("[object Object]");
   });
 
   it("follows provider redirects so RDAP lookups resolve", async () => {
@@ -171,6 +179,9 @@ describe("lookup API", () => {
     expect(body.http.code).toBe("DNS_NO_RECORDS");
     expect(body.overview.reachable).toBe(false);
     expect(body.overview.status).toBe("DNS_NO_RECORDS");
+    // Regression: an unresolvable name must not be reported as a blocked private address.
+    expect(body.tcp.status).toBe("not_run");
+    expect(body.tcp.reason).toMatch(/no public address/i);
   });
 
   it("classifies an HTTP timeout as CONNECT_TIMEOUT", async () => {
@@ -267,15 +278,15 @@ describe("lookup API", () => {
     expect(body.diagnosis.severity).toBe("ok");
   });
 
-  it("rate-limits a single client after 12 lookups in the window", async () => {
+  it("rate-limits a single client after 30 lookups in the window", async () => {
     installProviderMocks();
     const statuses: number[] = [];
-    for (let attempt = 0; attempt < 13; attempt += 1) {
+    for (let attempt = 0; attempt < 31; attempt += 1) {
       const response = await requestLookup({}, "8.8.8.8", "198.51.100.7");
       statuses.push(response.status);
     }
-    expect(statuses.slice(0, 12).every((status) => status === 200)).toBe(true);
-    expect(statuses[12]).toBe(429);
+    expect(statuses.slice(0, 30).every((status) => status === 200)).toBe(true);
+    expect(statuses[30]).toBe(429);
   });
 
   it("allows CORS only for an allowlisted origin and answers preflight", async () => {

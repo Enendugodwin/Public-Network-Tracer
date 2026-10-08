@@ -4,28 +4,29 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f5f7fb" />
-    <meta name="description" content="A stateless, source-linked lookup for public internet infrastructure." />
-    <title>Signal — Internet lookup</title>
+    <meta name="description" content="Public Internet Intelligence — a stateless, source-linked lookup for public internet infrastructure." />
+    <title>Public Internet Intelligence</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="config.js"></script>
     <script src="app.js" defer></script>
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Signal home">
+      <a class="brand" href="./" aria-label="Public Internet Intelligence home">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 32 32" fill="none"><path d="M16 3.5 27 8v7.2c0 6.2-4.2 10.6-11 13.3C9.2 25.8 5 21.4 5 15.2V8l11-4.5Z" stroke="currentColor" stroke-width="1.8"/><path d="m10.5 16 3.4 3.4 7.8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </span>
         <span>signal<span class="brand-dot">.</span></span>
+        <span class="brand-sub">Public Internet Intelligence</span>
       </a>
-      <div class="topbar-meta"><span class="status-indicator" aria-hidden="true"></span> Stateless lookup <span class="meta-divider">·</span> No search history</div>
+      <div class="topbar-meta"><span class="status-indicator" aria-hidden="true"></span> Stateless lookup <span class="meta-divider">·</span> History stays in your browser</div>
     </header>
 
     <main class="shell">
       <section class="intro" aria-labelledby="page-title">
         <div class="eyebrow"><span class="eyebrow-line"></span> PUBLIC INTERNET INTELLIGENCE</div>
-        <h1 id="page-title">One lookup.<br /><span>A clearer view of the internet.</span></h1>
-        <p class="intro-copy">Check a public IP, domain, or URL. See current HTTP behavior alongside cited DNS, registration, and network data.</p>
+        <h1 id="page-title">Look up a target.<br /><span>Understand its public posture.</span></h1>
+        <p class="intro-copy">Check a public IP, domain, or URL. Live HTTP behaviour, DNS, TLS, network attribution, and explained security findings — with a source for every claim.</p>
 
         <form id="lookupForm" class="search-form">
           <label class="sr-only" for="targetInput">IP address, domain, or URL</label>
@@ -34,7 +35,7 @@
           </span>
           <input id="targetInput" name="target" type="search" maxlength="2048" placeholder="IP address, domain, or URL" autocomplete="url" spellcheck="false" required />
           <button id="checkButton" class="check-button" type="submit">
-            <span>Check target</span>
+            <span>Analyse target</span>
             <svg aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </form>
@@ -43,38 +44,51 @@
             <span>Try:</span>
             <button type="button" class="example-chip" data-target="8.8.8.8">8.8.8.8</button>
             <button type="button" class="example-chip" data-target="example.com">example.com</button>
+            <button type="button" class="example-chip" data-target="github.com">github.com</button>
           </div>
           <div class="search-options">
             <label class="body-toggle" for="captureBody">
               <input type="checkbox" id="captureBody" />
               <span>Fetch response body</span>
             </label>
-            <p class="search-hint">One request · public data only · no saved results</p>
+            <p class="search-hint">One request · public data only · nothing stored server-side</p>
           </div>
         </div>
         <p id="formStatus" class="form-status" role="status" aria-live="polite"></p>
+
+        <div id="historyBlock" class="history" hidden>
+          <div class="history-head">
+            <span class="history-title">Recent lookups</span>
+            <button type="button" id="clearHistory" class="link-button">Clear history</button>
+          </div>
+          <div id="historyList" class="history-list"></div>
+          <p class="micro-note">Stored only in this browser (localStorage). The server keeps nothing.</p>
+        </div>
       </section>
 
       <section id="results" class="results" hidden aria-labelledby="results-heading">
         <div class="results-heading-row">
           <div>
-            <div class="eyebrow"><span class="eyebrow-line"></span> LOOKUP RESULT</div>
+            <div class="eyebrow"><span class="eyebrow-line"></span> TARGET SUMMARY</div>
             <h2 id="results-heading" class="result-target" tabindex="-1">—</h2>
             <div id="routeLine" class="route-line">
-              <span class="route-chip">
-                <span class="route-label">Your IP</span>
-                <span id="routeSource" class="route-value mono">—</span>
-              </span>
+              <span class="route-chip"><span class="route-label">Lookup source</span><span id="routeSource" class="route-value mono">—</span></span>
               <span class="route-arrow" aria-hidden="true">
                 <svg viewBox="0 0 24 12" fill="none"><path d="M0 6h19m-4.5-4.5L19 6l-4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </span>
-              <span class="route-chip">
-                <span class="route-label">Destination</span>
-                <span id="routeDestination" class="route-value mono">—</span>
-              </span>
+              <span class="route-chip"><span class="route-label">Target</span><span id="routeDestination" class="route-value mono">—</span></span>
             </div>
           </div>
-          <p id="checkedAt" class="checked-at"></p>
+          <div class="heading-actions">
+            <p id="checkedAt" class="checked-at"></p>
+            <div class="action-row">
+              <button type="button" class="ghost-button" id="shareLink">Copy link</button>
+              <button type="button" class="ghost-button" id="copyReport">Copy report</button>
+              <button type="button" class="ghost-button" id="exportJson">JSON</button>
+              <button type="button" class="ghost-button" id="exportCsv">CSV</button>
+              <button type="button" class="ghost-button" id="exportTxt">TXT</button>
+            </div>
+          </div>
         </div>
 
         <div id="diagnosis" class="diagnosis" hidden>
@@ -86,26 +100,40 @@
           <div id="diagnosisEvidence" class="token-list diagnosis-evidence"></div>
         </div>
 
-        <div class="overview-grid" aria-label="Overview">
-          <article class="metric-card metric-primary"><span class="metric-label">HTTP STATUS</span><strong id="metricStatus">—</strong><span class="metric-note" id="metricHttpNote">Live check</span></article>
-          <article class="metric-card"><span class="metric-label">RESOLVED IP</span><strong id="metricIp" class="mono">—</strong><span class="metric-note">Public address</span></article>
-          <article class="metric-card"><span class="metric-label">ASN</span><strong id="metricAsn" class="mono">—</strong><span class="metric-note" id="metricOrg">Network</span></article>
-          <article class="metric-card"><span class="metric-label">RESPONSE</span><strong id="metricTime">—</strong><span class="metric-note">Round trip</span></article>
+        <div class="summary-card">
+          <div class="summary-main">
+            <span class="metric-label">HTTP RESULT</span>
+            <strong id="sumStatus" class="summary-status">—</strong>
+            <span id="sumNote" class="metric-note"></span>
+          </div>
+          <div class="summary-grid">
+            <div><span class="metric-label">RESOLVED IP</span><strong id="sumIp" class="mono">—</strong></div>
+            <div><span class="metric-label">ASN</span><strong id="sumAsn" class="mono">—</strong><span id="sumOrg" class="metric-note"></span></div>
+            <div><span class="metric-label">RESPONSE</span><strong id="sumTime">—</strong></div>
+            <div><span class="metric-label">TRANSPORT</span><strong id="sumTls">—</strong></div>
+            <div><span class="metric-label">POSTURE</span><strong id="sumPosture">—</strong></div>
+            <div><span class="metric-label">DNS</span><strong id="sumDns">—</strong></div>
+          </div>
         </div>
 
-        <div class="detail-grid">
+        <div class="card-grid">
           <section class="panel" aria-labelledby="http-heading">
-            <div class="panel-heading"><span class="panel-icon http-icon" aria-hidden="true">01</span><div><h3 id="http-heading">HTTP details</h3><p>Live response from the target</p></div><span id="httpState" class="panel-state">—</span></div>
+            <div class="panel-heading"><span class="panel-icon http-icon" aria-hidden="true">01</span><div><h3 id="http-heading">HTTP</h3><p>Live response</p></div><span id="httpState" class="panel-state">—</span></div>
             <div id="httpNotice" class="notice" hidden></div>
             <dl class="detail-list">
-              <div><dt>Status code</dt><dd id="httpStatus">—</dd></div>
+              <div><dt>Method</dt><dd id="httpMethod" class="mono">—</dd></div>
+              <div><dt>Status</dt><dd id="httpStatus">—</dd></div>
+              <div><dt>Final URL</dt><dd id="httpFinalUrl" class="mono">—</dd></div>
               <div><dt>Response time</dt><dd id="httpTime">—</dd></div>
+              <div><dt>Content type</dt><dd id="httpType">—</dd></div>
               <div><dt>Content length</dt><dd id="httpLength">—</dd></div>
+              <div><dt>Encoding</dt><dd id="httpEncoding">—</dd></div>
               <div><dt>Server</dt><dd id="httpServer">—</dd></div>
-              <div><dt>TLS</dt><dd id="httpTls">—</dd></div>
-              <div><dt>Redirect</dt><dd id="httpRedirect">—</dd></div>
             </dl>
-            <div class="subsection"><h4>Selected response headers</h4><div id="httpHeaders" class="token-list"><span class="muted">No response headers</span></div></div>
+            <div class="subsection"><h4>Redirect chain</h4><div id="redirectChain" class="chain"><span class="muted">No redirects</span></div></div>
+            <div class="subsection"><h4>Security headers <span id="secHeaderScore" class="inline-score"></span></h4><div id="securityHeaders" class="token-list"><span class="muted">Not assessed</span></div><div id="missingHeaders" class="finding-list compact"></div></div>
+            <div class="subsection"><h4>Caching headers</h4><div id="cachingHeaders" class="token-list"><span class="muted">None observed</span></div></div>
+            <div class="subsection"><h4>Application headers</h4><div id="appHeaders" class="token-list"><span class="muted">None observed</span></div></div>
             <div class="subsection" id="bodySection" hidden>
               <h4>Response body</h4>
               <dl class="compact-list">
@@ -115,44 +143,91 @@
               </dl>
               <div id="bodyMarkers" class="token-list"></div>
               <pre id="bodyText" class="body-preview"></pre>
-              <p class="micro-note">Shown as inert text and never executed. Capped at 16 KB and not stored anywhere.</p>
+              <p class="micro-note">Shown as inert text and never executed. Text types only, capped at 16 KB, not stored.</p>
             </div>
-            <div class="subsection"><h4>TCP reachability</h4><div id="tcpChecks" class="token-list"><span class="muted">No TCP checks run</span></div><p id="tcpNote" class="micro-note"></p></div>
           </section>
 
+          <section class="panel" aria-labelledby="posture-heading">
+            <div class="panel-heading"><span class="panel-icon posture-icon" aria-hidden="true">02</span><div><h3 id="posture-heading">Internet posture</h3><p>Informational, not a vulnerability verdict</p></div></div>
+            <div class="posture-score">
+              <div class="posture-value"><strong id="postureScore">—</strong><span>/100</span></div>
+              <div class="posture-grade" id="postureGrade">—</div>
+            </div>
+            <div id="postureBars" class="posture-bars"></div>
+            <p class="micro-note">Derived from observed headers, TLS use, DNS records, and network attribution. Absence of a signal is not proof of a vulnerability.</p>
+          </section>
+        </div>
+
+        <section class="panel" aria-labelledby="findings-heading">
+          <div class="panel-heading"><span class="panel-icon finding-icon" aria-hidden="true">03</span><div><h3 id="findings-heading">Security findings</h3><p>Observed data turned into explained items</p></div><span id="findingsCount" class="panel-state">—</span></div>
+          <div id="findingsList" class="finding-list"></div>
+        </section>
+
+        <div class="card-grid">
+          <section class="panel" aria-labelledby="dns-heading">
+            <div class="panel-heading"><span class="panel-icon dns-icon" aria-hidden="true">04</span><div><h3 id="dns-heading">DNS</h3><p>Cloudflare DoH</p></div><span id="dnssecState" class="panel-state">—</span></div>
+            <dl id="dnsList" class="detail-list"></dl>
+            <p id="dnsNote" class="micro-note"></p>
+          </section>
+
+          <section class="panel" aria-labelledby="tls-heading">
+            <div class="panel-heading"><span class="panel-icon network-icon" aria-hidden="true">05</span><div><h3 id="tls-heading">TLS</h3><p>Transport security</p></div></div>
+            <dl class="detail-list">
+              <div><dt>HTTPS</dt><dd id="tlsEnabled">—</dd></div>
+              <div><dt>Protocol</dt><dd id="tlsVersion">—</dd></div>
+            </dl>
+            <p id="tlsNote" class="micro-note"></p>
+            <div class="subsection"><h4>Certificate observations</h4><div id="certificateRecords" class="token-list"><span class="muted">No passive certificate data</span></div><p class="micro-note">From a third-party dataset, not this request.</p></div>
+          </section>
+        </div>
+
+        <div class="card-grid">
           <section class="panel" aria-labelledby="network-heading">
-            <div class="panel-heading"><span class="panel-icon network-icon" aria-hidden="true">02</span><div><h3 id="network-heading">Network details</h3><p>Public records and observations</p></div></div>
+            <div class="panel-heading"><span class="panel-icon network-icon" aria-hidden="true">06</span><div><h3 id="network-heading">Network &amp; IP intelligence</h3><p>Public routing data</p></div></div>
             <dl class="detail-list">
               <div><dt>IP address</dt><dd id="networkIp" class="mono">—</dd></div>
+              <div><dt>IP version</dt><dd id="networkIpVersion">—</dd></div>
               <div><dt>ASN</dt><dd id="networkAsn" class="mono">—</dd></div>
               <div><dt>Organization</dt><dd id="networkOrg">—</dd></div>
+              <div><dt>BGP prefix</dt><dd id="networkPrefix" class="mono">—</dd></div>
               <div><dt>Country</dt><dd id="networkCountry">—</dd></div>
-              <div><dt>Network range</dt><dd id="networkRange" class="mono">—</dd></div>
               <div><dt>Network name</dt><dd id="networkName">—</dd></div>
+              <div><dt>Range</dt><dd id="networkRange" class="mono">—</dd></div>
+              <div><dt>Reverse DNS</dt><dd id="networkPtr" class="mono">—</dd></div>
+              <div><dt>Hosting type</dt><dd id="networkHosting">—</dd></div>
+              <div><dt>Abuse contact</dt><dd id="networkAbuse">—</dd></div>
             </dl>
-            <div class="subsection"><h4>DNS records</h4><div id="dnsRecords" class="token-list"><span class="muted">No public records returned</span></div><p id="dnsNote" class="micro-note"></p></div>
-            <div class="subsection"><h4>Observed ports</h4><div id="portRecords" class="token-list"><span class="muted">Not available</span></div><p id="portNote" class="micro-note"></p></div>
-            <div class="subsection"><h4>Observed services</h4><div id="serviceRecords" class="token-list"><span class="muted">No service details available</span></div></div>
-            <div class="subsection"><h4>Certificates</h4><div id="certificateRecords" class="token-list"><span class="muted">No certificate observations available</span></div></div>
-            <div id="domainDetails" class="subsection" hidden><h4>Domain registration</h4><dl class="compact-list"><div><dt>Registrar</dt><dd id="registrar">—</dd></div><div><dt>Registered</dt><dd id="registeredAt">—</dd></div><div><dt>Expires</dt><dd id="expiresAt">—</dd></div><div><dt>Name servers</dt><dd id="nameServers">—</dd></div></dl></div>
+            <div class="subsection"><h4>Relationship</h4><div class="relationship"><span id="relTarget" class="rel-node">—</span><span class="rel-arrow" aria-hidden="true">↓</span><span id="relIp" class="rel-node mono">—</span><span class="rel-arrow" aria-hidden="true">↓</span><span id="relAsn" class="rel-node mono">—</span><span class="rel-arrow" aria-hidden="true">↓</span><span id="relOrg" class="rel-node">—</span></div></div>
+            <div class="subsection"><h4>Services &amp; ports</h4><div class="port-group"><span class="port-tag active">ACTIVE CHECK</span><div id="activePorts" class="token-list"><span class="muted">No active checks</span></div></div><p id="activePortNote" class="micro-note"></p><div class="port-group"><span class="port-tag passive">PASSIVE OBSERVATION</span><div id="passivePorts" class="token-list"><span class="muted">No passive dataset</span></div></div><p id="passivePortNote" class="micro-note"></p><div id="serviceRecords" class="token-list"></div></div>
+          </section>
+
+          <section class="panel" aria-labelledby="registration-heading">
+            <div class="panel-heading"><span class="panel-icon source-icon" aria-hidden="true">07</span><div><h3 id="registration-heading">Registration</h3><p>RDAP registration data</p></div></div>
+            <dl class="detail-list">
+              <div><dt>Registrar</dt><dd id="registrar">—</dd></div>
+              <div><dt>Registered</dt><dd id="registeredAt">—</dd></div>
+              <div><dt>Expires</dt><dd id="expiresAt">—</dd></div>
+              <div><dt>Last changed</dt><dd id="changedAt">—</dd></div>
+            </dl>
+            <div class="subsection"><h4>Name servers</h4><div id="nameServers" class="token-list"><span class="muted">No registration data</span></div></div>
           </section>
         </div>
 
         <section class="panel sources-panel" aria-labelledby="sources-heading">
-          <div class="panel-heading"><span class="panel-icon source-icon" aria-hidden="true">03</span><div><h3 id="sources-heading">Sources &amp; freshness</h3><p>Every result links to its public source</p></div></div>
+          <div class="panel-heading"><span class="panel-icon source-icon" aria-hidden="true">08</span><div><h3 id="sources-heading">Sources &amp; evidence</h3><p>Every claim links to its source and its kind</p></div></div>
           <ul id="sourceList" class="source-list"></ul>
         </section>
-        <p class="privacy-note"><span aria-hidden="true">i</span> Results are returned for this request only. No query history or permanent cache is kept. Live HTTP checks run only for hosts or CIDRs explicitly configured as authorized.</p>
+        <p class="privacy-note"><span aria-hidden="true">i</span> Results are returned for this request only. Recent lookups live in your browser's localStorage and are never sent back. Live checks run from the checker's edge network, not from your IP.</p>
       </section>
 
       <section id="emptyState" class="empty-state" aria-label="How it works">
         <div class="empty-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit-core"><svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="13.5" stroke="currentColor" stroke-width="1.5"/><path d="M6.8 20h26.4M20 6.5c3.5 3.7 5.2 8.2 5.2 13.5S23.5 29.8 20 33.5c-3.5-3.7-5.2-8.2-5.2-13.5S16.5 10.2 20 6.5Z" stroke="currentColor" stroke-width="1.5"/></svg></span></div>
-        <h2>Everything you need for a first look.</h2>
-        <p>A single request brings together live HTTP behavior and public network context—without building a history of your searches.</p>
-        <div class="feature-row"><div><span class="feature-number">01</span><span>Check HTTP response</span></div><div><span class="feature-number">02</span><span>Enrich IP &amp; ASN</span></div><div><span class="feature-number">03</span><span>Trace every source</span></div></div>
+        <h2>Lookup → Analyse → Explain.</h2>
+        <p>One request returns live HTTP behaviour, the full DNS picture, TLS status, network attribution, and explained findings — each with its source and freshness.</p>
+        <div class="feature-row"><div><span class="feature-number">01</span><span>Live HTTP &amp; TLS</span></div><div><span class="feature-number">02</span><span>DNS, ASN, registration</span></div><div><span class="feature-number">03</span><span>Explained findings</span></div></div>
       </section>
     </main>
 
-    <footer class="footer"><span>Signal Internet Lookup</span><span>Public infrastructure only <span class="meta-divider">·</span> No persistent storage</span></footer>
+    <footer class="footer"><span>Public Internet Intelligence</span><span>Public infrastructure only <span class="meta-divider">·</span> No server-side storage</span></footer>
   </body>
 </html>

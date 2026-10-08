@@ -37,9 +37,19 @@ The captured body is reported as `contentType`, `bytesRead`, `truncated`, `textu
 
 Safety: the body is capped at 16 KB, never stored, and rendered in the dashboard as **inert text** (`textContent`, never `innerHTML`) so a hostile page cannot inject markup or script. Binary content types are not decoded at all.
 
-Enrichment: RDAP (IP, ASN, domain registration), Team Cymru ASN/prefix/country, and optional Shodan ports, services, and certificate fingerprints.
+Enrichment: RDAP (IP, ASN, domain registration), Team Cymru ASN/prefix/country, reverse DNS, and optional Shodan ports, services, and certificate fingerprints.
 
-There is no database, queue, saved search history, or permanent cache. It does not crawl pages, fetch response bodies, or grab banners.
+Every result is then analysed, not just displayed:
+
+- **Security findings** — each with what was seen, *why it matters*, a recommendation, and its evidence
+- **Internet posture score** — HTTP, TLS, headers, DNS, infrastructure (informational, not a vulnerability verdict)
+- **Full DNS picture** — A, AAAA, CNAME, MX, NS, TXT, CAA, SOA, plus PTR and the resolver's DNSSEC flag
+- **IP intelligence** — ASN, BGP prefix, organization, reverse DNS, hosting type, abuse contact
+- **Redirect chain** and grouped security/caching/application headers
+- **Export & sharing** — copy report, JSON/CSV/TXT download, and `?target=` shareable URLs
+- **Recent lookups** — kept in your browser's localStorage only; the server stores nothing
+
+There is no database, queue, or server-side history. It does not crawl pages, fetch response bodies unless asked, or grab banners.
 
 ## Why a site is unreachable
 
@@ -118,4 +128,6 @@ Python prototype (Python 3.11+): see [`README`](docs/architecture.md) and `pypro
 
 ## Safety
 
-Only public targets are accepted. Private, loopback, link-local, and reserved addresses are rejected, and a name resolving to a private address is refused rather than probed. The safety model is boundedness: one `HEAD`, at most 16 TCP connects, no bodies, no crawling, and a per-client rate limit. Extra ports beyond 80/443 require explicit opt-in.
+Only public targets are accepted. Private, loopback, link-local, and reserved addresses are rejected, and a name resolving to a private address is refused rather than probed — as are redirects that leave for a private destination.
+
+The safety model is boundedness: one HTTP request (`HEAD`, or `GET` when body capture is requested), at most 16 TCP connects, response bodies only on request and capped at 16 KB, no crawling, and per-client rate limits — **30 lookups/minute**, or **10 response-body fetches/minute** on a separate budget so the expensive path cannot exhaust the normal one. Extra ports beyond 80/443 require explicit opt-in.
