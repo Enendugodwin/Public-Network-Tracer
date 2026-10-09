@@ -408,5 +408,46 @@ describe("dashboard rendering", () => {
       expect((document.querySelector('input[name="probeSource"][value="cloudflare"]') as HTMLInputElement).checked).toBe(true);
       await vi.waitFor(() => expect(document.querySelector("#sumStatus")?.textContent).toContain("200"));
     });
+
+    it("only offers the force no-cors toggle for the Browser Probe", () => {
+      const options = document.querySelector("#browserOptions");
+      expect(options?.hasAttribute("hidden")).toBe(true);
+      selectProbeSource("browser");
+      expect(options?.hasAttribute("hidden")).toBe(false);
+      selectProbeSource("cloudflare");
+      expect(options?.hasAttribute("hidden")).toBe(true);
+    });
+
+    it("forces a single opaque no-cors request when the toggle is on", async () => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        return new Response(null, { status: 200 });
+      });
+
+      selectProbeSource("browser");
+      (document.querySelector("#forceNoCors") as HTMLInputElement).checked = true;
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("opaque_response"));
+
+      // Exactly one request, sent no-cors; no CORS-visible attempt was made.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://example.com/");
+      expect(calls[0]?.init?.mode).toBe("no-cors");
+      expect(calls[0]?.init?.credentials).toBe("omit");
+      expect(document.querySelector("#browserHttpStatus")?.textContent).toMatch(/opaque/i);
+      expect(document.querySelector("#browserSumReadable")?.textContent).toBe("No");
+    });
+
+    it("reports a network failure when the forced opaque request fails", async () => {
+      vi.stubGlobal("fetch", async () => {
+        throw new TypeError("Failed to fetch");
+      });
+
+      selectProbeSource("browser");
+      (document.querySelector("#forceNoCors") as HTMLInputElement).checked = true;
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("network_failure"));
+    });
   });
 });

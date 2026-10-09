@@ -35,10 +35,13 @@ Browser Probe outcomes are explicit:
 |---|---|
 | `http_response` | The browser sent the request **and** read the response (status and headers are shown) |
 | `browser_policy_blocked` | The request reached the network, but the browser hid the response (CORS / opaque response) — **not** proof the target is offline |
+| `opaque_response` | Forced no-cors: the request was delivered, but the opaque response hides the status and headers (reachability only) |
 | `network_failure` | The request failed at the network or browser level; the exact cause is not exposed to JavaScript |
 | `timeout` | No response within the browser probe timeout |
 
 The Fetch API cannot report the resolved IP, TLS handshake details, or every header, and a CORS error can occur even when the destination received the request. Browser Probe never fabricates a status code: a failed CORS-visible fetch is classified with a single opaque (`mode: "no-cors"`) request, so a browser probe makes at most **two** requests, sends **no** destination cookies or credentials (`credentials: "omit"`), and stores nothing.
+
+A **Force no-cors (opaque)** switch, shown only when Browser Probe is selected, sends just one opaque `no-cors` request and reports the `opaque_response` outcome — useful for confirming delivery to a target that does not send CORS headers, at the cost of not being able to read the status or any headers.
 
 Because Browser Probe fetches arbitrary destinations, the dashboard's `connect-src` CSP (set by the Worker when it serves the page) allows any `http(s)` origin. Scripts and styles stay same-origin, and remote content is only ever rendered as inert text.
 

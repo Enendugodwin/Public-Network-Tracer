@@ -121,6 +121,17 @@ function selectedProbeSource() {
   return checked?.value === "browser" ? "browser" : "cloudflare";
 }
 
+/** When set, the Browser Probe sends one opaque no-cors request instead of trying CORS first. */
+function forceNoCorsEnabled() {
+  return document.querySelector("#forceNoCors")?.checked === true;
+}
+
+/** The force-no-cors switch only applies to the Browser Probe. */
+function syncSourceOptions() {
+  const options = document.querySelector("#browserOptions");
+  if (options) options.hidden = selectedProbeSource() !== "browser";
+}
+
 /**
  * Turn loosely typed input ("example.com") into a URL the browser can fetch.
  * Only HTTP and HTTPS are accepted, and embedded credentials are refused so a
@@ -181,12 +192,38 @@ async function fetchWithTimeout(url, options, timeoutMs) {
  * Neither attempt is routed through the Worker, and neither reads a status
  * code it is not allowed to see.
  */
-async function browserProbe(rawTarget) {
+async function browserProbe(rawTarget, { forceNoCors = false } = {}) {
   const url = normalizeBrowserUrl(rawTarget);
   const requestedUrl = url.href;
   const startedAt = performance.now();
   const elapsed = () => Math.round(performance.now() - startedAt);
   const base = { source: "browser", requestedUrl, targetUrl: requestedUrl };
+  const noCorsOptions = {
+    method: "GET",
+    mode: "no-cors",
+    cache: "no-store",
+    redirect: "follow",
+    credentials: "omit",
+  };
+
+  // Forced opaque mode: one no-cors request only. The browser hides the status
+  // and all headers, so this reports delivery (reachability) and nothing more.
+  if (forceNoCors) {
+    const opaque = await fetchWithTimeout(url.href, noCorsOptions, BROWSER_PROBE_TIMEOUT_MS);
+    if (opaque.response) {
+      return { ...base, success: true, outcome: "opaque_response", responseTimeMs: elapsed(), error: null };
+    }
+    if (opaque.timedOut) {
+      return { ...base, success: false, outcome: "timeout", responseTimeMs: elapsed(), error: "Request timed out" };
+    }
+    return {
+      ...base,
+      success: false,
+      outcome: "network_failure",
+      responseTimeMs: elapsed(),
+      error: opaque.error instanceof Error ? opaque.error.message : "Request failed",
+    };
+  }
 
   const first = await fetchWithTimeout(url.href, {
     method: "GET",
@@ -214,13 +251,7 @@ async function browserProbe(rawTarget) {
     return { ...base, success: false, outcome: "timeout", responseTimeMs: elapsed(), error: "Request timed out" };
   }
 
-  const second = await fetchWithTimeout(url.href, {
-    method: "GET",
-    mode: "no-cors",
-    cache: "no-store",
-    redirect: "follow",
-    credentials: "omit",
-  }, BROWSER_CLASSIFY_TIMEOUT_MS);
+  const second = await fetchWithTimeout(url.href, noCorsOptions, BROWSER_CLASSIFY_TIMEOUT_MS);
 
   if (second.response) {
     return {
@@ -256,6 +287,12 @@ const BROWSER_OUTCOMES = {
     badge: "browser_policy_blocked",
     title: "Blocked from JavaScript by browser policy",
     summary: "The request reached the network, but the browser would not let this page read the response (CORS or an opaque response). The destination may still have received the request, so this is not proof it is offline or failing.",
+  },
+  opaque_response: {
+    severity: "warn",
+    badge: "opaque_response",
+    title: "Request delivered — response is opaque",
+    summary: "The forced no-cors request completed, so the destination received it. Because the request was sent opaque, the browser hides the status code and all response headers; treat this as reachability only.",
   },
   network_failure: {
     severity: "bad",
@@ -770,9 +807,10 @@ function renderBrowser(data) {
   addTokens(document.querySelector("#browserDiagnosisEvidence"), evidence);
 
   const statusText = readable ? `${probe.statusCode} ${probe.statusText ?? ""}`.trim() : "No readable status";
+  const statusClass = readable ? (probe.statusCode < 400 ? "ok" : "bad") : (probe.outcome === "opaque_response" ? "" : "bad");
   setText("#browserSumStatus", statusText);
-  document.querySelector("#browserSumStatus").className = `summary-status ${readable && probe.statusCode < 400 ? "ok" : "bad"}`;
-  setText("#browserSumNote", readable ? "response read by the browser" : "response not readable", "");
+  document.querySelector("#browserSumStatus").className = `summary-status ${statusClass}`.trim();
+  setText("#browserSumNote", readable ? "response read by the browser" : probe.outcome === "opaque_response" ? "request delivered; response opaque" : "response not readable", "");
   setText("#browserSumTime", Number.isFinite(probe.responseTimeMs) ? `${probe.responseTimeMs} ms` : "—");
   setText("#browserSumRedirect", probe.redirected == null ? "unknown" : probe.redirected ? "yes" : "no");
   const readableNode = document.querySelector("#browserSumReadable");
@@ -788,15 +826,23 @@ function renderBrowser(data) {
   notice.textContent = readable ? "" : `${meta.title}. ${meta.summary}`;
 
   setText("#browserHttpTarget", probe.targetUrl);
-  setText("#browserHttpStatus", readable ? `${probe.statusCode} ${probe.statusText ?? ""}`.trim() : "not accessible — the browser prevented reading the response");
+  const statusMessage = readable
+    ? `${probe.statusCode} ${probe.statusText ?? ""}`.trim()
+    : probe.outcome === "opaque_response"
+      ? "not accessible — sent with forced no-cors (opaque response)"
+      : probe.outcome === "browser_policy_blocked"
+        ? "not accessible — the browser prevented reading the response"
+        : "not accessible";
+  setText("#browserHttpStatus", statusMessage);
   setText("#browserHttpFinalUrl", probe.finalUrl);
   setText("#browserHttpTime", Number.isFinite(probe.responseTimeMs) ? `${probe.responseTimeMs} ms` : "—");
   setText("#browserHttpRedirect", probe.redirected == null ? "unknown" : probe.redirected ? "yes" : "no");
   setText("#browserHttpError", readable ? "none" : (probe.outcome ?? "unknown"));
+  const opaque = probe.outcome === "browser_policy_blocked" || probe.outcome === "opaque_response";
   addTokens(
     document.querySelector("#browserHeaders"),
     Object.entries(probe.headers ?? {}).map(([name, value]) => `${name}: ${value}`),
-    probe.outcome === "browser_policy_blocked" ? "None accessible (opaque response)" : "No headers exposed",
+    opaque ? "None accessible (opaque response)" : "No headers exposed",
   );
   setText("#browserLimitationNote", "The Fetch API cannot see TLS handshake details or the resolved IP, and CORS restricts which headers are readable. Browser extensions, proxies, VPNs and local network settings can change the path.", "");
 }
@@ -1000,7 +1046,7 @@ async function runBrowserProbe(target) {
   status.textContent = "Sending a request from this browser…";
 
   try {
-    const probe = await browserProbe(value);
+    const probe = await browserProbe(value, { forceNoCors: forceNoCorsEnabled() });
     const data = browserResult(probe);
     lastResult = data;
     renderBrowser(data);
@@ -1058,6 +1104,7 @@ document.querySelector("#browserRetryCloudflare")?.addEventListener("click", () 
   const cloudflare = document.querySelector('input[name="probeSource"][value="cloudflare"]');
   if (cloudflare) cloudflare.checked = true;
   updateRunLabel();
+  syncSourceOptions();
   input.value = target;
   runLookup(target);
 });
@@ -1096,9 +1143,13 @@ document.querySelector("#toggleKeyVisibility")?.addEventListener("click", (event
 });
 
 document.querySelectorAll('input[name="probeSource"]').forEach((radio) => {
-  radio.addEventListener("change", updateRunLabel);
+  radio.addEventListener("change", () => {
+    updateRunLabel();
+    syncSourceOptions();
+  });
 });
 updateRunLabel();
+syncSourceOptions();
 
 initShodanKey();
 renderHistory();
