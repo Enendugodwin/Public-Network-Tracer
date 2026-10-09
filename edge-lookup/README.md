@@ -45,6 +45,10 @@ A **Force no-cors (opaque)** switch, shown only when Browser Probe is selected, 
 
 The probe runs in a **temporary popup window** (`public/probe.html`). The dashboard opens it, that page performs the request from the browser and `postMessage`s the result back to the originating tab — same-origin only, matched by a per-run token — where it is rendered. If the popup is blocked, or does not report within 25 seconds, the probe falls back to running in the dashboard page itself. (A popup pointed straight at the cross-origin target could not script itself, so it could never report back; that is why the popup is an origin-served probe page.)
 
+### CORS Relaxer (optional)
+
+With the scoped **CORS Relaxer** extension (`cors-relaxer/`) installed and this dashboard's origin in its **My site** list, the extension marks the page and the dashboard shows a *CORS Relaxer detected* chip. Because the response headers are then rewritten for requests this dashboard initiates, the probe's CORS fetch can read cross-origin status, headers and body in full. Without it, cross-origin reads fall back to the opaque/`browser_policy_blocked` outcomes.
+
 Because Browser Probe fetches arbitrary destinations, the dashboard's `connect-src` CSP (set by the Worker when it serves the page) allows any `http(s)` origin. Scripts and styles stay same-origin, and remote content is only ever rendered as inert text.
 
 ## Result and failure codes

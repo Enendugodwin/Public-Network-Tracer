@@ -38,6 +38,15 @@ Public Network Tracer, add its origin (e.g.
 - **Recent matching requests** — observational log (method, status, URL) of
   requests from your site, so you can see what was affected.
 
+## Detecting it from your site
+
+On the configured **My site** origins only, the extension registers a small
+content script (`page-marker.js`) that sets
+`document.documentElement.dataset.corsRelaxer = "1"`. A page there can read that
+attribute to know the relaxer is active. Public Network Tracer uses it to show a
+"CORS Relaxer detected" chip and to mark browser-probe responses as full
+cross-origin reads. The marker script runs nowhere else.
+
 ## Install
 
 1. `chrome://extensions` → enable **Developer mode**.

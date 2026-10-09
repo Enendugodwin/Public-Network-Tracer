@@ -134,6 +134,20 @@ function syncSourceOptions() {
   if (options) options.hidden = selectedProbeSource() !== "browser";
 }
 
+/**
+ * The scoped CORS Relaxer extension marks pages of the configured site with a
+ * data attribute. When present, the probe's CORS fetch can read cross-origin
+ * responses in full instead of falling back to an opaque no-cors request.
+ */
+function corsRelaxerActive() {
+  return document.documentElement?.dataset?.corsRelaxer === "1";
+}
+
+function syncRelaxerStatus() {
+  const chip = document.querySelector("#relaxerStatus");
+  if (chip) chip.hidden = !corsRelaxerActive();
+}
+
 /* ---------- temporary probe window ---------- */
 
 // The probe runs in a same-origin popup so it can perform the request and
@@ -190,6 +204,7 @@ function openProbeWindow(url, useNoCors) {
 function browserResult(probe) {
   return {
     probeSource: "browser",
+    corsRelaxer: corsRelaxerActive(),
     checkedAt: new Date().toISOString(),
     target: { kind: "url", host: probe.targetUrl, url: probe.targetUrl },
     browser: probe,
@@ -682,6 +697,7 @@ function renderBrowser(data) {
   setText("#browserDiagnosisSummary", meta.summary);
   const evidence = [`source: browser (this device)`, `target: ${probe.targetUrl}`];
   if (Number.isFinite(probe.responseTimeMs)) evidence.push(`response time: ${probe.responseTimeMs} ms`);
+  if (data.corsRelaxer) evidence.push("cors relaxer: active (full cross-origin read)");
   if (probe.error) evidence.push(`error: ${probe.error}`);
   addTokens(document.querySelector("#browserDiagnosisEvidence"), evidence);
 
@@ -1043,10 +1059,14 @@ document.querySelectorAll('input[name="probeSource"]').forEach((radio) => {
   radio.addEventListener("change", () => {
     updateRunLabel();
     syncSourceOptions();
+    syncRelaxerStatus();
   });
 });
 updateRunLabel();
 syncSourceOptions();
+syncRelaxerStatus();
+// The extension's marker may appear slightly after this script runs.
+window.addEventListener("load", syncRelaxerStatus);
 
 initShodanKey();
 renderHistory();

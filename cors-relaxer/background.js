@@ -10,6 +10,7 @@
 // Use only on sites you own or are authorized to assess.
 
 const MAX_MATCHES = 100;
+const MARKER_ID = "cors-relaxer-marker";
 
 // Cached flattening of the config for the sync webRequest monitor.
 let siteSet = new Set();
@@ -83,6 +84,38 @@ const RELAXED_HEADERS = [
   { header: "cross-origin-resource-policy", operation: "set", value: "cross-origin" },
 ];
 
+/**
+ * Keep a content script registered for the configured sites only, so a page
+ * there can detect the relaxer. Nothing runs anywhere else.
+ */
+async function syncPageMarker(sites) {
+  const matches = [];
+  for (const entry of sites) {
+    if (entry.enabled && entry.domain) {
+      matches.push(`*://${entry.domain}/*`, `*://*.${entry.domain}/*`);
+    }
+  }
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [MARKER_ID] });
+  } catch {
+    /* nothing registered yet */
+  }
+  if (!matches.length) return;
+  try {
+    await chrome.scripting.registerContentScripts([
+      {
+        id: MARKER_ID,
+        matches: [...new Set(matches)],
+        js: ["page-marker.js"],
+        runAt: "document_start",
+        allFrames: false,
+      },
+    ]);
+  } catch (error) {
+    console.warn("CORS Relaxer: could not register the page marker", error);
+  }
+}
+
 /** Rebuild the dynamic rule set from the current config. */
 async function applyRules() {
   const { enabled, sites, destinations } = await getState();
@@ -108,6 +141,7 @@ async function applyRules() {
   await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
   await chrome.action.setBadgeBackgroundColor({ color: "#1e40af" });
   await chrome.action.setBadgeText({ text: addRules.length ? "on" : "" });
+  await syncPageMarker(sites);
   return addRules.length;
 }
 

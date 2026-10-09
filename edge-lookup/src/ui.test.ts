@@ -84,6 +84,7 @@ function fixture(overrides: Record<string, any> = {}) {
 function loadPage() {
   const body = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
   document.body.innerHTML = body.replace(/<script[\s\S]*?<\/script>/gi, "");
+  delete document.documentElement.dataset.corsRelaxer;
   // eslint-disable-next-line no-new-func
   new Function(probeCoreSource)();
   // eslint-disable-next-line no-new-func
@@ -540,6 +541,42 @@ describe("dashboard rendering", () => {
         origin: location.origin,
       }));
       await vi.waitFor(() => expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(false));
+    });
+
+    it("shows the CORS Relaxer chip when the extension marks the page", () => {
+      document.documentElement.dataset.corsRelaxer = "1";
+      selectProbeSource("browser");
+      expect(document.querySelector("#browserOptions")?.hasAttribute("hidden")).toBe(false);
+      expect(document.querySelector("#relaxerStatus")?.hasAttribute("hidden")).toBe(false);
+    });
+
+    it("flags a full cross-origin read when the CORS Relaxer is present", async () => {
+      (globalThis as any).happyDOM?.setURL?.("https://tracer.test/");
+      document.documentElement.dataset.corsRelaxer = "1";
+      vi.stubGlobal("fetch", async () => Response.json(fixture()));
+
+      const opened: string[] = [];
+      (window as any).open = (url: string) => {
+        opened.push(String(url));
+        return { closed: false };
+      };
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(opened.length).toBe(1));
+      const token = new URL(opened[0]).searchParams.get("token");
+
+      window.dispatchEvent(new MessageEvent("message", {
+        data: {
+          type: "PIT_BROWSER_PROBE_RESULT",
+          token,
+          probe: { source: "browser", success: true, outcome: "http_response", requestedUrl: "https://example.com/", targetUrl: "https://example.com/", finalUrl: "https://example.com/", statusCode: 200, statusText: "OK", responseTimeMs: 12, headers: {} },
+        },
+        origin: location.origin,
+      }));
+
+      await vi.waitFor(() => expect(document.querySelector("#browserSumStatus")?.textContent).toContain("200"));
+      expect(document.querySelector("#browserDiagnosisEvidence")?.textContent).toContain("cors relaxer");
     });
   });
 });
