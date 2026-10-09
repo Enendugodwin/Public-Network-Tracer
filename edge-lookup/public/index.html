@@ -64,7 +64,11 @@
             <input type="checkbox" id="forceNoCors" />
             <span>Force no-cors (opaque) — reachability only; the browser hides the status code and all headers</span>
           </label>
-          <span id="relaxerStatus" class="relaxer-chip" hidden>CORS Relaxer detected — cross-origin responses can be read in full</span>
+          <div class="relaxer-cta">
+            <span id="relaxerStatus" class="relaxer-chip" hidden>CORS Relaxer detected — cross-origin responses can be read in full</span>
+            <a id="downloadRelaxer" class="ghost-button" href="cors-relaxer.zip" download="cors-relaxer.zip">Download CORS Relaxer</a>
+          </div>
+          <p class="micro-note">Read cross-origin status and headers in full with the scoped CORS Relaxer extension. Chrome cannot install it from a website, so: download the ZIP, unzip it, open <span class="mono">chrome://extensions</span>, enable <strong>Developer mode</strong>, choose <strong>Load unpacked</strong>, then add this site under <strong>My site</strong>.</p>
         </div>
         <div class="search-extras">
           <div class="examples" aria-label="Example targets">

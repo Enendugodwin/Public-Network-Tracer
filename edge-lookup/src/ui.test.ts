@@ -461,6 +461,14 @@ describe("dashboard rendering", () => {
       expect(document.querySelector("#relaxerStatus")?.hasAttribute("hidden")).toBe(false);
     });
 
+    it("offers the CORS Relaxer download to browser-probe users", () => {
+      selectProbeSource("browser");
+      const link = document.querySelector("#downloadRelaxer") as HTMLAnchorElement;
+      expect(link).toBeTruthy();
+      expect(link.getAttribute("href")).toBe("cors-relaxer.zip");
+      expect(link.hasAttribute("download")).toBe(true);
+    });
+
     it("flags a full cross-origin read when the CORS Relaxer is present", async () => {
       document.documentElement.dataset.corsRelaxer = "1";
       vi.stubGlobal("fetch", async () => new Response("ok", { status: 200, statusText: "OK", headers: { "content-type": "text/html" } }));

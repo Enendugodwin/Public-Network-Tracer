@@ -49,9 +49,15 @@ cross-origin reads. The marker script runs nowhere else.
 
 ## Install
 
-1. `chrome://extensions` → enable **Developer mode**.
-2. **Load unpacked** → select this `cors-relaxer` folder.
-3. Approve the requested permissions.
+From the Public Network Tracer dashboard, the **Download CORS Relaxer** button
+serves a ZIP of this extension. Chrome does not allow a web page to install an
+extension, so:
+
+1. Download and unzip the ZIP (or use this `cors-relaxer` folder directly).
+2. `chrome://extensions` → enable **Developer mode**.
+3. **Load unpacked** → select the unzipped `cors-relaxer` folder.
+4. Approve the requested permissions, then add your dashboard origin under
+   **My site**.
 
 ## Limitations (important)
 

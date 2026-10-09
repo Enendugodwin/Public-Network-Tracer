@@ -49,6 +49,8 @@ The probe runs entirely in the dashboard page — no popups. The dashboard valid
 
 With the scoped **CORS Relaxer** extension (`cors-relaxer/`) installed and this dashboard's origin in its **My site** list, the extension marks the page and the dashboard shows a *CORS Relaxer detected* chip. Because the response headers are then rewritten for requests this dashboard initiates, the probe's CORS fetch can read cross-origin status, headers and body in full. Without it, cross-origin reads fall back to the opaque/`browser_policy_blocked` outcomes.
 
+A **Download CORS Relaxer** button under the Browser Probe options serves `public/cors-relaxer.zip`. Chrome will not install an extension from a web page, so the ZIP must be unzipped and loaded via `chrome://extensions` → Developer mode → *Load unpacked*. Regenerate the ZIP (`Compress-Archive cors-relaxer edge-lookup/public/cors-relaxer.zip`) whenever the extension changes.
+
 Because Browser Probe fetches arbitrary destinations, the dashboard's `connect-src` CSP (set by the Worker when it serves the page) allows any `http(s)` origin. Scripts and styles stay same-origin, and remote content is only ever rendered as inert text.
 
 ## Result and failure codes
