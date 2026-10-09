@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Browser Probe</title>
+    <link rel="stylesheet" href="probe.css" />
+    <script src="browser-probe.js" defer></script>
+    <script src="probe.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1>Browser Probe</h1>
+      <p>Running the request from this browser and reporting back to the Public Network Tracer tab.</p>
+    </header>
+
+    <main>
+      <dl class="facts">
+        <div><dt>Target</dt><dd id="target" class="mono">—</dd></div>
+        <div><dt>Outcome</dt><dd id="outcome">Running…</dd></div>
+        <div><dt>Status</dt><dd id="status">—</dd></div>
+        <div><dt>Response time</dt><dd id="time">—</dd></div>
+        <div><dt>Redirected</dt><dd id="redirect">—</dd></div>
+      </dl>
+
+      <div id="notice" class="notice" hidden></div>
+
+      <h2>Accessible response headers</h2>
+      <div id="headers" class="tokens"><span class="muted">None accessible</span></div>
+
+      <div class="actions">
+        <button type="button" id="openTarget">Open target in a new tab</button>
+        <button type="button" id="closeWindow" class="secondary">Close window</button>
+      </div>
+
+      <p class="note">The result is sent to the originating tab with <code>postMessage</code>, verified against its origin. Nothing is routed through the Cloudflare Worker, and no status code is invented when the browser cannot read the response.</p>
+    </main>
+  </body>
+</html>

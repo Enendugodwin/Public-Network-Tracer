@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(resolve(here, "../public/index.html"), "utf8");
 const appSource = readFileSync(resolve(here, "../public/app.js"), "utf8");
+const probeCoreSource = readFileSync(resolve(here, "../public/browser-probe.js"), "utf8");
 
 /** A complete-enough API payload for the renderer to consume. */
 function fixture(overrides: Record<string, any> = {}) {
@@ -83,6 +84,8 @@ function fixture(overrides: Record<string, any> = {}) {
 function loadPage() {
   const body = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
   document.body.innerHTML = body.replace(/<script[\s\S]*?<\/script>/gi, "");
+  // eslint-disable-next-line no-new-func
+  new Function(probeCoreSource)();
   // eslint-disable-next-line no-new-func
   new Function(appSource)();
 }
@@ -295,6 +298,20 @@ describe("dashboard rendering", () => {
   });
 
   describe("request source: Browser Probe", () => {
+    let originalOpen: any;
+
+    beforeEach(() => {
+      // happy-dom returns a Window from window.open, which would leave the
+      // popup flow waiting for a postMessage. Default the cases here to the
+      // in-page fallback; the popup cases override window.open themselves.
+      originalOpen = (window as any).open;
+      (window as any).open = () => null;
+    });
+
+    afterEach(() => {
+      (window as any).open = originalOpen;
+    });
+
     function selectProbeSource(value: "cloudflare" | "browser") {
       const radio = document.querySelector(`input[name="probeSource"][value="${value}"]`) as HTMLInputElement;
       radio.checked = true;
@@ -448,6 +465,81 @@ describe("dashboard rendering", () => {
       (document.querySelector("#forceNoCors") as HTMLInputElement).checked = true;
       await submitLookup("https://example.com/");
       await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("network_failure"));
+    });
+
+    it("opens the temporary probe page and renders the result it posts back", async () => {
+      (globalThis as any).happyDOM?.setURL?.("https://tracer.test/");
+
+      const apiCalls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string | URL) => {
+        apiCalls.push(String(url));
+        return Response.json(fixture());
+      });
+
+      const opened: string[] = [];
+      (window as any).open = (url: string) => {
+        opened.push(String(url));
+        return { closed: false };
+      };
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(opened.length).toBe(1));
+
+      const probeUrl = new URL(opened[0]);
+      expect(probeUrl.pathname.endsWith("/probe.html")).toBe(true);
+      expect(probeUrl.searchParams.get("target")).toBe("https://example.com/");
+      const token = probeUrl.searchParams.get("token");
+      expect(token).toBeTruthy();
+
+      const probe = {
+        source: "browser",
+        success: true,
+        outcome: "http_response",
+        requestedUrl: "https://example.com/",
+        targetUrl: "https://example.com/",
+        finalUrl: "https://example.com/",
+        statusCode: 200,
+        statusText: "OK",
+        redirected: false,
+        responseTimeMs: 42,
+        headers: { "content-type": "text/html" },
+      };
+      window.dispatchEvent(new MessageEvent("message", { data: { type: "PIT_BROWSER_PROBE_RESULT", token, probe }, origin: location.origin }));
+
+      await vi.waitFor(() => expect(document.querySelector("#browserSumStatus")?.textContent).toContain("200"));
+      expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(false);
+      // The request ran in the popup, never through the Worker.
+      expect(apiCalls.some((call) => call.includes("/api/lookup"))).toBe(false);
+    });
+
+    it("ignores a probe result posted from another origin", async () => {
+      (globalThis as any).happyDOM?.setURL?.("https://tracer.test/");
+      vi.stubGlobal("fetch", async () => Response.json(fixture()));
+
+      const opened: string[] = [];
+      (window as any).open = (url: string) => {
+        opened.push(String(url));
+        return { closed: false };
+      };
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(opened.length).toBe(1));
+      const token = new URL(opened[0]).searchParams.get("token");
+
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "PIT_BROWSER_PROBE_RESULT", token, probe: { outcome: "http_response", success: true, statusCode: 200, targetUrl: "https://example.com/", headers: {} } },
+        origin: "https://evil.example",
+      }));
+      expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(true);
+
+      // Resolve the still-pending run so no timer lingers past the test.
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "PIT_BROWSER_PROBE_RESULT", token, probe: { outcome: "timeout", success: false, targetUrl: "https://example.com/", requestedUrl: "https://example.com/", responseTimeMs: 1 } },
+        origin: location.origin,
+      }));
+      await vi.waitFor(() => expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(false));
     });
   });
 });

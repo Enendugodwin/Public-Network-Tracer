@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --ink: #17243b;
+  --muted: #65748b;
+  --line: #e2e8f0;
+  --line-strong: #d6deea;
+  --blue: #1e40af;
+  --blue-light: #eaf0ff;
+  --amber: #a75b06;
+  --amber-light: #fff5e8;
+  --green: #18815c;
+  --green-light: #eaf7f1;
+  --red: #b63a3a;
+  font-family: 'DM Sans', Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; padding: 18px; background: var(--bg); color: var(--ink); font-size: 13px; line-height: 1.5; }
+header { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 18px; letter-spacing: -.4px; }
+header p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+main { margin-top: 14px; }
+.facts { margin: 0 0 12px; }
+.facts > div { min-height: 34px; display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 10px; border-bottom: 1px solid #eef2f7; }
+.facts > div:last-child { border-bottom: 0; }
+.facts dt { color: #7b889a; font-size: 11px; }
+.facts dd { margin: 0; overflow-wrap: anywhere; color: #263851; font-size: 12px; font-weight: 500; }
+.mono { font-family: 'DM Mono', ui-monospace, monospace; }
+.muted { color: #929eae; font-size: 11px; }
+.notice { margin: 4px 0 12px; padding: 10px 11px; border: 1px solid #f2dfbd; border-radius: 8px; background: #fffaf2; color: #815416; font-size: 11px; }
+.notice[hidden] { display: none; }
+h2 { margin: 6px 0 8px; color: #617088; font-family: 'DM Mono', ui-monospace, monospace; font-size: 10px; font-weight: 500; letter-spacing: .7px; text-transform: uppercase; }
+.tokens { display: flex; flex-wrap: wrap; gap: 6px; }
+.token { padding: 5px 8px; border: 1px solid #e4eaf3; border-radius: 6px; background: #f8faff; color: #415777; font-family: 'DM Mono', ui-monospace, monospace; font-size: 10px; overflow-wrap: anywhere; }
+.actions { display: flex; gap: 8px; margin: 16px 0 0; }
+button { cursor: pointer; padding: 8px 12px; border: 0; border-radius: 7px; background: var(--blue); color: white; font-size: 12px; font-weight: 600; }
+button:hover { background: #18358f; }
+button.secondary { background: var(--surface); border: 1px solid var(--line-strong); color: #4d5f79; }
+button.secondary:hover { border-color: #a7b9e5; background: #f7f9ff; color: var(--blue); }
+.note { margin: 14px 0 0; color: #78869a; font-size: 10px; line-height: 1.6; }
+code { font-family: 'DM Mono', ui-monospace, monospace; }
+:focus-visible { outline: 3px solid #7f9de3; outline-offset: 2px; }
