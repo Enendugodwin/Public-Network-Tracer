@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CORS Relaxer</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h2>CORS Relaxer</h2>
+      <p id="summary">Loading…</p>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="enabled" checked>
+      Enabled
+    </label>
+  </header>
+
+  <p class="warning">
+    Relaxes CORS <strong>only for requests initiated by your site</strong> below,
+    toward other sites. In this browser only — it cannot change a server's policy.
+    Use only on sites you own or are authorized to assess.
+  </p>
+
+  <h3>My site <span class="hint">allowed to read other sites</span></h3>
+  <div class="toolbar">
+    <input id="siteInput" placeholder="your site, e.g. tracer.example.org">
+    <button id="addSite">Add</button>
+  </div>
+  <div class="toolbar">
+    <button id="addCurrent" class="secondary">Add current site</button>
+  </div>
+  <p id="status" class="status"></p>
+  <div id="sites" class="domains"></div>
+
+  <h3>Destinations <span class="hint">empty = any other site</span></h3>
+  <div class="toolbar">
+    <input id="destInput" placeholder="optional, e.g. api.example.org">
+    <button id="addDest">Add</button>
+  </div>
+  <div id="destinations" class="domains"></div>
+
+  <h3>Recent matching requests</h3>
+  <div class="toolbar">
+    <button id="clearMatches" class="secondary">Clear history</button>
+  </div>
+  <main id="matches"></main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

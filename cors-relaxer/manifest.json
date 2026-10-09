@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "CORS Relaxer (scoped)",
+  "version": "1.0.0",
+  "description": "Relaxes CORS response headers for an explicit allowlist of domains only. For authorized testing; an empty allowlist changes nothing.",
+  "permissions": [
+    "declarativeNetRequestWithHostAccess",
+    "storage",
+    "tabs",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_title": "CORS Relaxer",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
