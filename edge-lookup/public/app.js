@@ -154,8 +154,34 @@ function browserResult(probe) {
     corsRelaxer: corsRelaxerActive(),
     checkedAt: new Date().toISOString(),
     target: { kind: "url", host: probe.targetUrl, url: probe.targetUrl },
+    lookupSource: {
+      observedIp: null,
+      unavailableReason: "Detecting your public IP…",
+      label: "Your public IP as seen by the browser",
+      probeOrigin: "Live requests run from your network, not the checker's edge.",
+    },
     browser: probe,
   };
+}
+
+/** Show the browser's public IP as the origin of the probe, when it can be detected. */
+function renderBrowserRouteIp(data) {
+  const node = document.querySelector("#browserRouteIp");
+  if (!node) return;
+  node.textContent = "resolving…";
+  node.title = "";
+  detectBrowserPublicIp().then((ip) => {
+    node.textContent = ip ?? "unavailable";
+    node.title = ip ? "Detected by your browser (Cloudflare trace endpoint)." : "Could not detect your public IP from the browser.";
+    if (data) {
+      data.lookupSource = {
+        observedIp: ip,
+        unavailableReason: ip ? null : "The browser could not detect your public IP.",
+        label: "Your public IP as seen by the browser",
+        probeOrigin: "Live requests run from your network, not the checker's edge.",
+      };
+    }
+  });
 }
 
 /* ---------- optional Shodan key (bring your own) ---------- */
@@ -635,6 +661,7 @@ function renderBrowser(data) {
 
   setText("#browser-heading", data.target?.host);
   setText("#browserRouteTarget", probe.targetUrl);
+  renderBrowserRouteIp(data);
   setText("#browserCheckedAt", `Probed ${formatTime(data.checkedAt)}`);
 
   const block = document.querySelector("#browserDiagnosis");
@@ -717,6 +744,7 @@ function browserReportLines(data) {
   const lines = [];
   lines.push("Public Internet Intelligence — Browser probe report");
   lines.push("Request source: Browser");
+  lines.push(`Your public IP: ${data.lookupSource?.observedIp ?? "unavailable"}`);
   lines.push(`Target URL: ${probe.targetUrl ?? data.target?.host ?? "—"}`);
   lines.push(`Checked: ${data.checkedAt ?? "—"}`);
   lines.push(`Outcome: ${probe.outcome ?? "unknown"} (${meta.title})`);

@@ -434,11 +434,11 @@ describe("dashboard rendering", () => {
       await submitLookup("https://example.com/");
       await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("opaque_response"));
 
-      // Exactly one request, sent no-cors; no CORS-visible attempt was made.
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.url).toBe("https://example.com/");
-      expect(calls[0]?.init?.mode).toBe("no-cors");
-      expect(calls[0]?.init?.credentials).toBe("omit");
+      // Exactly one request to the target, sent no-cors; no CORS-visible attempt.
+      const probeCalls = calls.filter((call) => call.url === "https://example.com/");
+      expect(probeCalls).toHaveLength(1);
+      expect(probeCalls[0]?.init?.mode).toBe("no-cors");
+      expect(probeCalls[0]?.init?.credentials).toBe("omit");
       expect(document.querySelector("#browserHttpStatus")?.textContent).toMatch(/opaque/i);
       expect(document.querySelector("#browserSumReadable")?.textContent).toBe("No");
     });
@@ -467,6 +467,17 @@ describe("dashboard rendering", () => {
       expect(link).toBeTruthy();
       expect(link.getAttribute("href")).toBe("cors-relaxer.zip");
       expect(link.hasAttribute("download")).toBe(true);
+    });
+
+    it("shows the browser's public IP as the origin of the probe", async () => {
+      vi.stubGlobal("fetch", async (url: string | URL) => {
+        if (String(url).includes("cdn-cgi/trace")) return new Response("ip=198.51.100.7\n", { status: 200 });
+        return new Response("ok", { status: 200, statusText: "OK", headers: { "content-type": "text/html" } });
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserRouteIp")?.textContent).toBe("198.51.100.7"));
     });
 
     it("flags a full cross-origin read when the CORS Relaxer is present", async () => {
