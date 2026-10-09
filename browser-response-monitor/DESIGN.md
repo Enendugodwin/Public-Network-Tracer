@@ -10,7 +10,10 @@ However, there are browser security limitations to account for.
 ## How it would work
 
 1. **Origin website** — the user enters a target URL and clicks **Test**.
-2. **Temporary browser page** — opens the target and runs permitted browser-side checks.
+2. **Temporary browser page** — opens the target in a **popup window** and runs
+   permitted browser-side checks. A popup is a controlled browsing context that
+   can be watched and closed programmatically, which is what a troubleshooting
+   tool needs.
 3. **Collect results** — status where available, timing, redirects and errors.
 4. **Return to origin website** — send results using `postMessage` or a controlled API.
 
@@ -26,9 +29,25 @@ However, there are browser security limitations to account for.
 | Inspect all network requests and their status codes | Better handled by a browser extension |
 | Send collected results to the origin site | Yes, using `postMessage` or an API |
 
-Important: opening a page in a new tab does **not** bypass CORS. The browser can
-display a response while preventing JavaScript on your temporary page from reading
-that response.
+Important: opening a page in a new tab **or a popup window** does **not** bypass
+CORS. The browser can display a response while preventing JavaScript on your
+temporary page from reading that response.
+
+### Popups
+
+This is a troubleshooting tool, so the browser-side pieces are popups that stay
+visible while you work:
+
+- **Temporary page** — opened as a popup window from the user's click
+  (`window.open(url, "pit-probe", features)`), so the origin page keeps a handle
+  to watch and close it, with a normal tab as the fallback if the popup blocker
+  intervenes.
+- **Extension monitor** — `browser-response-monitor/` can pop out of the
+  transient toolbar popup into a persistent popup window
+  (`chrome.windows.create({ type: "popup" })`) that live-updates as traffic
+  arrives.
+- **Cleanup** — close the temporary window after results are returned or after a
+  timeout.
 
 ## Best implementation for this project
 
@@ -38,7 +57,8 @@ request-status capture is needed:
 - **Temporary page** — handles the user interaction and runs ordinary
   browser-side tests.
 - **Browser extension** — observes actual browser request metadata where
-  permissions allow (`browser-response-monitor/`).
+  permissions allow (`browser-response-monitor/`). Its toolbar popup can
+  **Pop out** into a persistent window that live-updates while you browse.
 - **Origin website** — receives results and displays them in Public Network Tracer.
 - **Cleanup** — close the temporary tab after results are returned or after a
   timeout.

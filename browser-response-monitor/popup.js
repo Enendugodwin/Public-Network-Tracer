@@ -2,6 +2,11 @@ const results = document.getElementById("results");
 const summary = document.getElementById("summary");
 const filter = document.getElementById("filter");
 const capture = document.getElementById("capture");
+const popout = document.getElementById("popout");
+
+// Same page, two modes: the toolbar popup (transient) and a persistent
+// popup window opened with chrome.windows.create (popup.html?window=1).
+const inWindow = new URLSearchParams(location.search).get("window") === "1";
 
 let requests = [];
 
@@ -144,6 +149,32 @@ document.getElementById("export").addEventListener("click", () => {
   link.download = "browser-responses.csv";
   link.click();
   URL.revokeObjectURL(url);
+});
+
+// Pop out into a persistent window so traffic can be watched while you browse.
+// The toolbar popup closes as soon as it loses focus; this window does not.
+if (inWindow) {
+  popout.hidden = true;
+  document.body.classList.add("window-mode");
+} else {
+  popout.addEventListener("click", () => {
+    chrome.windows.create({
+      url: chrome.runtime.getURL("popup.html?window=1"),
+      type: "popup",
+      width: 720,
+      height: 780
+    });
+  });
+}
+
+// Live-update the open monitor as new responses land. The toolbar popup
+// re-reads on open, so this only matters for the persistent window.
+let liveTimer = null;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (!changes.requests && !changes.captureEnabled) return;
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(refresh, 150);
 });
 
 refresh();

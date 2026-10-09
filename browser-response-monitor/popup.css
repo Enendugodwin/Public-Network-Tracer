@@ -119,3 +119,20 @@ button {
   text-align: center;
   color: #aab7c8;
 }
+
+#popout {
+  background: #1f3347;
+  color: #cfe0f5;
+}
+
+/* Persistent monitor window (opened via chrome.windows.create). */
+body.window-mode {
+  width: auto;
+  min-width: 460px;
+  max-height: none;
+  overflow: auto;
+}
+
+body.window-mode #results {
+  max-height: none;
+}
