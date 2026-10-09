@@ -299,20 +299,6 @@ describe("dashboard rendering", () => {
   });
 
   describe("request source: Browser Probe", () => {
-    let originalOpen: any;
-
-    beforeEach(() => {
-      // happy-dom returns a Window from window.open, which would leave the
-      // popup flow waiting for a postMessage. Default the cases here to the
-      // in-page fallback; the popup cases override window.open themselves.
-      originalOpen = (window as any).open;
-      (window as any).open = () => null;
-    });
-
-    afterEach(() => {
-      (window as any).open = originalOpen;
-    });
-
     function selectProbeSource(value: "cloudflare" | "browser") {
       const radio = document.querySelector(`input[name="probeSource"][value="${value}"]`) as HTMLInputElement;
       radio.checked = true;
@@ -468,81 +454,6 @@ describe("dashboard rendering", () => {
       await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("network_failure"));
     });
 
-    it("opens the temporary probe page and renders the result it posts back", async () => {
-      (globalThis as any).happyDOM?.setURL?.("https://tracer.test/");
-
-      const apiCalls: string[] = [];
-      vi.stubGlobal("fetch", async (url: string | URL) => {
-        apiCalls.push(String(url));
-        return Response.json(fixture());
-      });
-
-      const opened: string[] = [];
-      (window as any).open = (url: string) => {
-        opened.push(String(url));
-        return { closed: false };
-      };
-
-      selectProbeSource("browser");
-      await submitLookup("https://example.com/");
-      await vi.waitFor(() => expect(opened.length).toBe(1));
-
-      const probeUrl = new URL(opened[0]);
-      expect(probeUrl.pathname.endsWith("/probe.html")).toBe(true);
-      expect(probeUrl.searchParams.get("target")).toBe("https://example.com/");
-      const token = probeUrl.searchParams.get("token");
-      expect(token).toBeTruthy();
-
-      const probe = {
-        source: "browser",
-        success: true,
-        outcome: "http_response",
-        requestedUrl: "https://example.com/",
-        targetUrl: "https://example.com/",
-        finalUrl: "https://example.com/",
-        statusCode: 200,
-        statusText: "OK",
-        redirected: false,
-        responseTimeMs: 42,
-        headers: { "content-type": "text/html" },
-      };
-      window.dispatchEvent(new MessageEvent("message", { data: { type: "PIT_BROWSER_PROBE_RESULT", token, probe }, origin: location.origin }));
-
-      await vi.waitFor(() => expect(document.querySelector("#browserSumStatus")?.textContent).toContain("200"));
-      expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(false);
-      // The request ran in the popup, never through the Worker.
-      expect(apiCalls.some((call) => call.includes("/api/lookup"))).toBe(false);
-    });
-
-    it("ignores a probe result posted from another origin", async () => {
-      (globalThis as any).happyDOM?.setURL?.("https://tracer.test/");
-      vi.stubGlobal("fetch", async () => Response.json(fixture()));
-
-      const opened: string[] = [];
-      (window as any).open = (url: string) => {
-        opened.push(String(url));
-        return { closed: false };
-      };
-
-      selectProbeSource("browser");
-      await submitLookup("https://example.com/");
-      await vi.waitFor(() => expect(opened.length).toBe(1));
-      const token = new URL(opened[0]).searchParams.get("token");
-
-      window.dispatchEvent(new MessageEvent("message", {
-        data: { type: "PIT_BROWSER_PROBE_RESULT", token, probe: { outcome: "http_response", success: true, statusCode: 200, targetUrl: "https://example.com/", headers: {} } },
-        origin: "https://evil.example",
-      }));
-      expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(true);
-
-      // Resolve the still-pending run so no timer lingers past the test.
-      window.dispatchEvent(new MessageEvent("message", {
-        data: { type: "PIT_BROWSER_PROBE_RESULT", token, probe: { outcome: "timeout", success: false, targetUrl: "https://example.com/", requestedUrl: "https://example.com/", responseTimeMs: 1 } },
-        origin: location.origin,
-      }));
-      await vi.waitFor(() => expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(false));
-    });
-
     it("shows the CORS Relaxer chip when the extension marks the page", () => {
       document.documentElement.dataset.corsRelaxer = "1";
       selectProbeSource("browser");
@@ -551,30 +462,11 @@ describe("dashboard rendering", () => {
     });
 
     it("flags a full cross-origin read when the CORS Relaxer is present", async () => {
-      (globalThis as any).happyDOM?.setURL?.("https://tracer.test/");
       document.documentElement.dataset.corsRelaxer = "1";
-      vi.stubGlobal("fetch", async () => Response.json(fixture()));
-
-      const opened: string[] = [];
-      (window as any).open = (url: string) => {
-        opened.push(String(url));
-        return { closed: false };
-      };
+      vi.stubGlobal("fetch", async () => new Response("ok", { status: 200, statusText: "OK", headers: { "content-type": "text/html" } }));
 
       selectProbeSource("browser");
       await submitLookup("https://example.com/");
-      await vi.waitFor(() => expect(opened.length).toBe(1));
-      const token = new URL(opened[0]).searchParams.get("token");
-
-      window.dispatchEvent(new MessageEvent("message", {
-        data: {
-          type: "PIT_BROWSER_PROBE_RESULT",
-          token,
-          probe: { source: "browser", success: true, outcome: "http_response", requestedUrl: "https://example.com/", targetUrl: "https://example.com/", finalUrl: "https://example.com/", statusCode: 200, statusText: "OK", responseTimeMs: 12, headers: {} },
-        },
-        origin: location.origin,
-      }));
-
       await vi.waitFor(() => expect(document.querySelector("#browserSumStatus")?.textContent).toContain("200"));
       expect(document.querySelector("#browserDiagnosisEvidence")?.textContent).toContain("cors relaxer");
     });

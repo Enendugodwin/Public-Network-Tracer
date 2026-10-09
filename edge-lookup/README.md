@@ -43,7 +43,7 @@ The Fetch API cannot report the resolved IP, TLS handshake details, or every hea
 
 A **Force no-cors (opaque)** switch, shown only when Browser Probe is selected, sends just one opaque `no-cors` request and reports the `opaque_response` outcome — useful for confirming delivery to a target that does not send CORS headers, at the cost of not being able to read the status or any headers.
 
-The probe runs in a **temporary popup window** (`public/probe.html`). The dashboard opens it, that page performs the request from the browser and `postMessage`s the result back to the originating tab — same-origin only, matched by a per-run token — where it is rendered. If the popup is blocked, or does not report within 25 seconds, the probe falls back to running in the dashboard page itself. (A popup pointed straight at the cross-origin target could not script itself, so it could never report back; that is why the popup is an origin-served probe page.)
+The probe runs entirely in the dashboard page — no popups. The dashboard validates the URL, performs the request from your browser, and renders the result inline.
 
 ### CORS Relaxer (optional)
 

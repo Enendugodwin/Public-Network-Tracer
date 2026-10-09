@@ -112,8 +112,8 @@ async function detectBrowserPublicIp() {
 
 /* ---------- browser probe (client-side, no Worker) ---------- */
 
-// URL validation, the fetch logic and the outcome labels are shared with the
-// temporary pop-out probe page; they live in browser-probe.js (window.BrowserProbe).
+// URL validation, the fetch logic and the outcome labels live in
+// browser-probe.js (window.BrowserProbe).
 if (!window.BrowserProbe) throw new Error("browser-probe.js must load before app.js");
 const { browserProbe, normalizeBrowserUrl, BROWSER_OUTCOMES } = window.BrowserProbe;
 
@@ -146,59 +146,6 @@ function corsRelaxerActive() {
 function syncRelaxerStatus() {
   const chip = document.querySelector("#relaxerStatus");
   if (chip) chip.hidden = !corsRelaxerActive();
-}
-
-/* ---------- temporary probe window ---------- */
-
-// The probe runs in a same-origin popup so it can perform the request and
-// postMessage the result back. A popup that navigated straight to the
-// cross-origin target could not script itself, so it could never report back.
-const PROBE_WINDOW_TIMEOUT_MS = 25_000;
-let pendingProbeWindow = null;
-
-function probeToken() {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }
-}
-
-window.addEventListener("message", (event) => {
-  // Only accept a result from our own origin, for the run we are waiting on.
-  if (event.origin !== location.origin) return;
-  const data = event.data;
-  if (!data || data.type !== "PIT_BROWSER_PROBE_RESULT" || !data.probe) return;
-  if (!pendingProbeWindow || data.token !== pendingProbeWindow.token) return;
-  clearTimeout(pendingProbeWindow.timer);
-  const resolve = pendingProbeWindow.resolve;
-  pendingProbeWindow = null;
-  resolve(data.probe);
-});
-
-/**
- * Open the temporary probe page in a popup window, let it run the request, and
- * wait for the result it posts back. Resolves with the probe result, or null
- * when the popup was blocked or never reported (the caller falls back in-page).
- */
-function openProbeWindow(url, useNoCors) {
-  if (typeof window.open !== "function") return Promise.resolve(null);
-  const probeUrl = new URL("probe.html", location.href);
-  const token = probeToken();
-  probeUrl.searchParams.set("target", url.href);
-  probeUrl.searchParams.set("token", token);
-  if (useNoCors) probeUrl.searchParams.set("nocors", "1");
-
-  const win = window.open(probeUrl.href, "pit-browser-probe", "popup=yes,width=560,height=720,resizable=yes,scrollbars=yes");
-  if (!win) return Promise.resolve(null);
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      if (pendingProbeWindow && pendingProbeWindow.token === token) pendingProbeWindow = null;
-      resolve(null);
-    }, PROBE_WINDOW_TIMEOUT_MS);
-    pendingProbeWindow = { token, resolve, timer };
-  });
 }
 
 function browserResult(probe) {
@@ -935,7 +882,7 @@ async function runBrowserProbe(target) {
   if (!value) return;
   input.value = value;
 
-  // Validate before opening anything, so bad input fails fast and inline.
+  // Validate before sending anything, so bad input fails fast and inline.
   let url;
   try {
     url = normalizeBrowserUrl(value);
@@ -950,17 +897,10 @@ async function runBrowserProbe(target) {
   status.classList.remove("success", "error");
   button.disabled = true;
   button.querySelector("span").textContent = "Probing…";
-  status.textContent = "Opening a browser probe window…";
+  status.textContent = "Probing from this browser…";
 
   try {
-    const useNoCors = forceNoCorsEnabled();
-    // Prefer the temporary popup page (opened from the click, so it is not
-    // blocked). If the popup is unavailable, probe from this page instead.
-    let probe = await openProbeWindow(url, useNoCors);
-    if (!probe) {
-      status.textContent = "Pop-up unavailable — probing from this page instead…";
-      probe = await browserProbe(url.href, { forceNoCors: useNoCors });
-    }
+    const probe = await browserProbe(url.href, { forceNoCors: forceNoCorsEnabled() });
     const data = browserResult(probe);
     lastResult = data;
     renderBrowser(data);

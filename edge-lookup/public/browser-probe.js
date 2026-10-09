@@ -1,7 +1,7 @@
-// Shared browser-probe core.
+// Browser-probe core.
 //
-// Used by the dashboard (app.js) and by the temporary pop-out probe page
-// (probe.js), so both speak the same result shape. Exposes window.BrowserProbe.
+// URL validation, the fetch logic and the outcome labels used by the dashboard
+// (app.js). Exposes window.BrowserProbe.
 (function () {
   const BROWSER_PROBE_TIMEOUT_MS = 15_000;
   const BROWSER_CLASSIFY_TIMEOUT_MS = 8_000;

@@ -1,72 +1,45 @@
-# Browser-side checks via a temporary page (design)
+# Browser-side checks (design)
 
-Yes. Your website can open a temporary page in a new browser tab, run checks from
-that page, and send the results back to your original website. This is useful for
-Public Network Tracer because you want to measure activity from the user's actual
-browser rather than from Cloudflare.
+Public Network Tracer measures reachability from two vantage points: the
+Cloudflare Worker edge (**Cloudflare Probe**) and the user's own browser
+(**Browser Probe**). The browser-side checks run **in the dashboard page
+itself** — there are no popups.
 
 However, there are browser security limitations to account for.
 
-## How it would work
+## How it works
 
-1. **Origin website** — the user enters a target URL and clicks **Test**.
-2. **Temporary browser page** — opens the target in a **popup window** and runs
-   permitted browser-side checks. A popup is a controlled browsing context that
-   can be watched and closed programmatically, which is what a troubleshooting
-   tool needs.
+1. **Origin website** — the user enters a target URL and clicks the run button.
+2. **In-page request** — the dashboard validates the URL and sends the request
+   from the browser (a CORS-visible fetch first, then a single opaque `no-cors`
+   request to classify a failure).
 3. **Collect results** — status where available, timing, redirects and errors.
-4. **Return to origin website** — send results using `postMessage` or a controlled API.
+4. **Render** — the result is shown inline on the dashboard.
 
-## What can it actually retrieve?
+## What it can retrieve
 
-| Check | Possible from a temporary page? |
+| Check | Possible from the browser page? |
 | --- | --- |
-| Open the target website | Yes |
-| Measure page load timing | Yes, with browser API limitations |
-| Read HTTP status code | Not reliably for arbitrary cross-origin navigation |
-| Read response headers/body | Only when browser security permissions allow it |
-| Detect navigation errors | Partially; browser error pages restrict access |
+| Send a request to the target | Yes |
+| Measure response time | Yes |
+| Read HTTP status code | Only when the response allows CORS |
+| Read response headers/body | Only when the response allows CORS |
+| Detect blocked/opaque responses | Yes (reported as unreadable, never a fabricated status) |
 | Inspect all network requests and their status codes | Better handled by a browser extension |
-| Send collected results to the origin site | Yes, using `postMessage` or an API |
 
-Important: opening a page in a new tab **or a popup window** does **not** bypass
-CORS. The browser can display a response while preventing JavaScript on your
-temporary page from reading that response.
+Important: a browser request does **not** bypass CORS. The browser can display a
+response while preventing JavaScript from reading it. A CORS error is **not**
+proof the destination is offline.
 
-### Popups
+## Options when a full read is needed
 
-This is a troubleshooting tool, so the browser-side pieces are popups that stay
-visible while you work:
+- **CORS Relaxer extension** (`cors-relaxer/`) — scoped so that only *your site*
+  can read responses from other sites; enables full cross-origin status, headers
+  and body for the Browser Probe. Deny-by-default, client-side only.
+- **Browser Response Monitor extension** (`browser-response-monitor/`) —
+  observes the browser's actual request metadata (status codes for every
+  request) where permissions allow.
 
-- **Temporary page** — opened as a popup window from the user's click
-  (`window.open(url, "pit-probe", features)`), so the origin page keeps a handle
-  to watch and close it, with a normal tab as the fallback if the popup blocker
-  intervenes.
-- **Extension monitor** — `browser-response-monitor/` can pop out of the
-  transient toolbar popup into a persistent popup window
-  (`chrome.windows.create({ type: "popup" })`) that live-updates as traffic
-  arrives.
-- **Cleanup** — close the temporary window after results are returned or after a
-  timeout.
+## Authorization
 
-## Best implementation for this project
-
-Use a temporary page **plus** a lightweight browser extension when comprehensive
-request-status capture is needed:
-
-- **Temporary page** — handles the user interaction and runs ordinary
-  browser-side tests.
-- **Browser extension** — observes actual browser request metadata where
-  permissions allow (`browser-response-monitor/`). Its toolbar popup can
-  **Pop out** into a persistent window that live-updates while you browse.
-- **Origin website** — receives results and displays them in Public Network Tracer.
-- **Cleanup** — close the temporary tab after results are returned or after a
-  timeout.
-
-Use `window.postMessage()` only between pages you control, verify `event.origin`
-and the expected message format, and avoid sending sensitive page contents.
-
-## Open decision
-
-Before implementation: does the temporary page need to test **any public
-website**, or only websites **you own or have permission to assess**?
+Only test targets you own or are explicitly authorized to assess.
