@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Response Monitor</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h2>Response Monitor</h2>
+      <p id="summary">Loading requests...</p>
+    </div>
+
+    <label>
+      <input type="checkbox" id="capture" checked>
+      Capture
+    </label>
+  </header>
+
+  <div class="toolbar">
+    <input id="filter" placeholder="Filter URL, status or method">
+    <button id="export">Export CSV</button>
+    <button id="clear">Clear</button>
+  </div>
+
+  <p class="notice">
+    Monitoring browser HTTP/HTTPS response metadata.
+    Response bodies are not captured.
+  </p>
+
+  <main id="results"></main>
+
+  <script src="popup.js"></script>
+</body>
+</html>
