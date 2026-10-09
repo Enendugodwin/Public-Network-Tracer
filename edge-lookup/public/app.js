@@ -3,6 +3,7 @@ const input = document.querySelector("#targetInput");
 const button = document.querySelector("#checkButton");
 const status = document.querySelector("#formStatus");
 const results = document.querySelector("#results");
+const browserResults = document.querySelector("#browserResults");
 const emptyState = document.querySelector("#emptyState");
 
 /**
@@ -16,7 +17,18 @@ const emptyState = document.querySelector("#emptyState");
 function apiBase() {
   const configured = String(window.TRACER_API_BASE ?? "").replace(/\/+$/, "");
   const host = location.hostname;
-  const localDev = host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".local");
+  // Loopback and private/LAN hosts are development servers, which answer
+  // /api/lookup themselves. Using the configured base there would send the
+  // browser cross-origin to a Worker that does not allowlist the dev origin.
+  const localDev =
+    host === "localhost" ||
+    host === "::1" ||
+    host === "0.0.0.0" ||
+    host.endsWith(".local") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host);
   return localDev ? "" : configured;
 }
 const HISTORY_KEY = "pit.history.v1";
@@ -96,6 +108,176 @@ async function detectBrowserPublicIp() {
   } catch {
     return null;
   }
+}
+
+/* ---------- browser probe (client-side, no Worker) ---------- */
+
+const BROWSER_PROBE_TIMEOUT_MS = 15_000;
+const BROWSER_CLASSIFY_TIMEOUT_MS = 8_000;
+
+/** Which source the user selected: "cloudflare" (Worker) or "browser" (this device). */
+function selectedProbeSource() {
+  const checked = document.querySelector('input[name="probeSource"]:checked');
+  return checked?.value === "browser" ? "browser" : "cloudflare";
+}
+
+/**
+ * Turn loosely typed input ("example.com") into a URL the browser can fetch.
+ * Only HTTP and HTTPS are accepted, and embedded credentials are refused so a
+ * probe never carries authentication the user did not intend.
+ */
+function normalizeBrowserUrl(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) throw new Error("Enter a URL to probe from the browser.");
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `https://${value}`;
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error("That is not a valid URL.");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("Only HTTP and HTTPS URLs are supported.");
+  }
+  if (url.username || url.password) {
+    throw new Error("URLs with embedded credentials are not accepted.");
+  }
+  return url;
+}
+
+function headersToObject(headers) {
+  const result = {};
+  headers.forEach((value, name) => {
+    result[name] = value;
+  });
+  return result;
+}
+
+/** A fetch that aborts after `timeoutMs`, reporting whether the timer fired. */
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return { response, timedOut: false, error: null };
+  } catch (error) {
+    return { response: null, timedOut: timedOut || error?.name === "AbortError", error };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Send one request from this browser to the target, without the Worker.
+ *
+ * A CORS-visible fetch resolves only when the browser can read the response.
+ * When it fails, a single opaque (`mode: "no-cors"`) request distinguishes
+ * "the request reached the network but the response is unreadable" from "the
+ * request never completed" — JavaScript cannot see that difference directly.
+ * Neither attempt is routed through the Worker, and neither reads a status
+ * code it is not allowed to see.
+ */
+async function browserProbe(rawTarget) {
+  const url = normalizeBrowserUrl(rawTarget);
+  const requestedUrl = url.href;
+  const startedAt = performance.now();
+  const elapsed = () => Math.round(performance.now() - startedAt);
+  const base = { source: "browser", requestedUrl, targetUrl: requestedUrl };
+
+  const first = await fetchWithTimeout(url.href, {
+    method: "GET",
+    mode: "cors",
+    cache: "no-store",
+    redirect: "follow",
+    credentials: "omit",
+  }, BROWSER_PROBE_TIMEOUT_MS);
+
+  if (first.response) {
+    return {
+      ...base,
+      success: true,
+      outcome: "http_response",
+      finalUrl: first.response.url || requestedUrl,
+      statusCode: first.response.status,
+      statusText: first.response.statusText,
+      redirected: first.response.redirected === true,
+      responseTimeMs: elapsed(),
+      headers: headersToObject(first.response.headers),
+    };
+  }
+
+  if (first.timedOut) {
+    return { ...base, success: false, outcome: "timeout", responseTimeMs: elapsed(), error: "Request timed out" };
+  }
+
+  const second = await fetchWithTimeout(url.href, {
+    method: "GET",
+    mode: "no-cors",
+    cache: "no-store",
+    redirect: "follow",
+    credentials: "omit",
+  }, BROWSER_CLASSIFY_TIMEOUT_MS);
+
+  if (second.response) {
+    return {
+      ...base,
+      success: false,
+      outcome: "browser_policy_blocked",
+      responseTimeMs: elapsed(),
+      error: "Response not readable (CORS or an opaque response)",
+    };
+  }
+  if (second.timedOut) {
+    return { ...base, success: false, outcome: "timeout", responseTimeMs: elapsed(), error: "Request timed out" };
+  }
+  return {
+    ...base,
+    success: false,
+    outcome: "network_failure",
+    responseTimeMs: elapsed(),
+    error: first.error instanceof Error ? first.error.message : "Request failed",
+  };
+}
+
+/** Human-readable meaning for each browser-probe outcome. */
+const BROWSER_OUTCOMES = {
+  http_response: {
+    severity: "ok",
+    badge: "http_response",
+    title: "HTTP response received",
+    summary: "The browser sent the request and could read the response, including its status and headers.",
+  },
+  browser_policy_blocked: {
+    severity: "warn",
+    badge: "browser_policy_blocked",
+    title: "Blocked from JavaScript by browser policy",
+    summary: "The request reached the network, but the browser would not let this page read the response (CORS or an opaque response). The destination may still have received the request, so this is not proof it is offline or failing.",
+  },
+  network_failure: {
+    severity: "bad",
+    badge: "network_failure",
+    title: "Network request failed",
+    summary: "The request failed at the network or browser level — offline, DNS failure, connection refused, TLS error, or a policy block. Browsers do not expose the exact cause to JavaScript, so treat this as indeterminate.",
+  },
+  timeout: {
+    severity: "bad",
+    badge: "timeout",
+    title: "Request timed out",
+    summary: "No response arrived within the browser-probe timeout. The destination may be slow, unreachable, or silently dropping the request.",
+  },
+};
+
+function browserResult(probe) {
+  return {
+    probeSource: "browser",
+    checkedAt: new Date().toISOString(),
+    target: { kind: "url", host: probe.targetUrl, url: probe.targetUrl },
+    browser: probe,
+  };
 }
 
 /* ---------- optional Shodan key (bring your own) ---------- */
@@ -564,7 +746,63 @@ function renderSources(sources) {
   }
 }
 
+function renderBrowser(data) {
+  const probe = data.browser ?? {};
+  const meta = BROWSER_OUTCOMES[probe.outcome] ?? BROWSER_OUTCOMES.network_failure;
+  const readable = probe.outcome === "http_response";
+
+  results.hidden = true;
+  emptyState.hidden = true;
+  browserResults.hidden = false;
+
+  setText("#browser-heading", data.target?.host);
+  setText("#browserRouteTarget", probe.targetUrl);
+  setText("#browserCheckedAt", `Probed ${formatTime(data.checkedAt)}`);
+
+  const block = document.querySelector("#browserDiagnosis");
+  block.className = `diagnosis ${meta.severity}`.trim();
+  setText("#browserDiagnosisBadge", meta.badge);
+  setText("#browserDiagnosisTitle", meta.title);
+  setText("#browserDiagnosisSummary", meta.summary);
+  const evidence = [`source: browser (this device)`, `target: ${probe.targetUrl}`];
+  if (Number.isFinite(probe.responseTimeMs)) evidence.push(`response time: ${probe.responseTimeMs} ms`);
+  if (probe.error) evidence.push(`error: ${probe.error}`);
+  addTokens(document.querySelector("#browserDiagnosisEvidence"), evidence);
+
+  const statusText = readable ? `${probe.statusCode} ${probe.statusText ?? ""}`.trim() : "No readable status";
+  setText("#browserSumStatus", statusText);
+  document.querySelector("#browserSumStatus").className = `summary-status ${readable && probe.statusCode < 400 ? "ok" : "bad"}`;
+  setText("#browserSumNote", readable ? "response read by the browser" : "response not readable", "");
+  setText("#browserSumTime", Number.isFinite(probe.responseTimeMs) ? `${probe.responseTimeMs} ms` : "—");
+  setText("#browserSumRedirect", probe.redirected == null ? "unknown" : probe.redirected ? "yes" : "no");
+  const readableNode = document.querySelector("#browserSumReadable");
+  setText("#browserSumReadable", readable ? "Yes" : "No");
+  readableNode.className = readable ? "ok-text" : "bad-text";
+
+  const state = document.querySelector("#browserHttpState");
+  state.textContent = readable ? "Live" : (probe.outcome ?? "Unavailable");
+  state.className = `panel-state ${readable ? "live" : "off"}`;
+
+  const notice = document.querySelector("#browserHttpNotice");
+  notice.hidden = readable;
+  notice.textContent = readable ? "" : `${meta.title}. ${meta.summary}`;
+
+  setText("#browserHttpTarget", probe.targetUrl);
+  setText("#browserHttpStatus", readable ? `${probe.statusCode} ${probe.statusText ?? ""}`.trim() : "not accessible — the browser prevented reading the response");
+  setText("#browserHttpFinalUrl", probe.finalUrl);
+  setText("#browserHttpTime", Number.isFinite(probe.responseTimeMs) ? `${probe.responseTimeMs} ms` : "—");
+  setText("#browserHttpRedirect", probe.redirected == null ? "unknown" : probe.redirected ? "yes" : "no");
+  setText("#browserHttpError", readable ? "none" : (probe.outcome ?? "unknown"));
+  addTokens(
+    document.querySelector("#browserHeaders"),
+    Object.entries(probe.headers ?? {}).map(([name, value]) => `${name}: ${value}`),
+    probe.outcome === "browser_policy_blocked" ? "None accessible (opaque response)" : "No headers exposed",
+  );
+  setText("#browserLimitationNote", "The Fetch API cannot see TLS handshake details or the resolved IP, and CORS restricts which headers are readable. Browser extensions, proxies, VPNs and local network settings can change the path.", "");
+}
+
 function render(data) {
+  browserResults.hidden = true;
   results.hidden = false;
   emptyState.hidden = true;
   setText(".result-target", data.target?.host);
@@ -584,11 +822,36 @@ function render(data) {
 
 /* ---------- export ---------- */
 
+function browserReportLines(data) {
+  const probe = data.browser ?? {};
+  const meta = BROWSER_OUTCOMES[probe.outcome] ?? BROWSER_OUTCOMES.network_failure;
+  const headers = Object.entries(probe.headers ?? {});
+  const lines = [];
+  lines.push("Public Internet Intelligence — Browser probe report");
+  lines.push("Request source: Browser");
+  lines.push(`Target URL: ${probe.targetUrl ?? data.target?.host ?? "—"}`);
+  lines.push(`Checked: ${data.checkedAt ?? "—"}`);
+  lines.push(`Outcome: ${probe.outcome ?? "unknown"} (${meta.title})`);
+  lines.push(`Status: ${probe.outcome === "http_response" ? `${probe.statusCode} ${probe.statusText ?? ""}`.trim() : "not accessible"}`);
+  if (probe.finalUrl) lines.push(`Final URL: ${probe.finalUrl}`);
+  if (Number.isFinite(probe.responseTimeMs)) lines.push(`Response time: ${probe.responseTimeMs} ms`);
+  lines.push(`Redirected: ${probe.redirected == null ? "unknown" : probe.redirected ? "yes" : "no"}`);
+  if (probe.error) lines.push(`Error: ${probe.error}`);
+  lines.push("");
+  lines.push(`Accessible headers (${headers.length})`);
+  for (const [name, value] of headers) lines.push(`  ${name}: ${value}`);
+  lines.push("");
+  lines.push(meta.summary);
+  return lines;
+}
+
 function reportLines(data) {
+  if (data.probeSource === "browser") return browserReportLines(data);
   const http = data.http ?? {};
   const network = data.network ?? {};
   const lines = [];
   lines.push(`Public Internet Intelligence report`);
+  lines.push(`Request source: Cloudflare probe`);
   lines.push(`Target: ${data.target?.host ?? "—"}`);
   lines.push(`Checked: ${data.checkedAt ?? "—"}`);
   lines.push(`HTTP: ${http.status === "complete" ? `${http.statusCode} ${http.statusText ?? ""}`.trim() : (http.code ?? "not run")}`);
@@ -625,6 +888,7 @@ function toCsv(data) {
   const rows = [["section", "field", "value"]];
   const push = (section, field, value) => rows.push([section, field, value == null ? "" : String(value)]);
   push("target", "host", data.target?.host);
+  push("target", "probeSource", data.probeSource);
   push("target", "checkedAt", data.checkedAt);
   push("overview", "status", data.overview?.status);
   push("overview", "reachable", data.overview?.reachable);
@@ -710,13 +974,54 @@ async function runLookup(target) {
     status.textContent = error instanceof Error ? error.message : "Lookup failed. Try again.";
   } finally {
     button.disabled = false;
-    button.querySelector("span").textContent = "Analyse target";
+    updateRunLabel();
+  }
+}
+
+/** The run button reflects the selected source. */
+function updateRunLabel() {
+  const span = button.querySelector("span");
+  if (span) span.textContent = selectedProbeSource() === "browser" ? "Run browser probe" : "Analyse target";
+}
+
+/**
+ * Probe the target from this browser. Never falls back to the Cloudflare
+ * Worker: a failed browser probe stays a failed browser probe until the user
+ * explicitly chooses to retry through the Worker.
+ */
+async function runBrowserProbe(target) {
+  const value = String(target ?? input.value ?? "").trim();
+  if (!value) return;
+  input.value = value;
+  status.textContent = "";
+  status.classList.remove("success", "error");
+  button.disabled = true;
+  button.querySelector("span").textContent = "Probing…";
+  status.textContent = "Sending a request from this browser…";
+
+  try {
+    const probe = await browserProbe(value);
+    const data = browserResult(probe);
+    lastResult = data;
+    renderBrowser(data);
+    rememberLookup(data.target?.host ?? value, data);
+    status.classList.add(probe.success ? "success" : "error");
+    status.textContent = probe.success ? "Browser probe complete." : "Browser probe finished with a limitation — see the result.";
+    document.querySelector("#browser-heading").focus?.({ preventScroll: true });
+  } catch (error) {
+    // Validation problems (bad URL, non-HTTP protocol) never reach fetch.
+    status.classList.add("error");
+    status.textContent = error instanceof Error ? error.message : "Browser probe failed.";
+  } finally {
+    button.disabled = false;
+    updateRunLabel();
   }
 }
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  runLookup(input.value);
+  if (selectedProbeSource() === "browser") runBrowserProbe(input.value);
+  else runLookup(input.value);
 });
 
 document.querySelectorAll(".example-chip").forEach((chip) => {
@@ -735,6 +1040,26 @@ document.querySelector("#copyReport")?.addEventListener("click", async () => {
   if (!lastResult) return;
   const ok = await copyText(reportLines(lastResult).join("\n"));
   status.textContent = ok ? "Report copied to clipboard." : "Clipboard unavailable.";
+});
+
+document.querySelector("#browserCopyReport")?.addEventListener("click", async () => {
+  if (!lastResult) return;
+  const ok = await copyText(reportLines(lastResult).join("\n"));
+  status.textContent = ok ? "Report copied to clipboard." : "Clipboard unavailable.";
+});
+
+document.querySelector("#browserExportJson")?.addEventListener("click", () => {
+  if (lastResult) download(`pit-browser-${slug(lastResult.target?.host)}.json`, JSON.stringify(lastResult, null, 2), "application/json");
+});
+
+// An explicit, user-driven switch — never an automatic fallback.
+document.querySelector("#browserRetryCloudflare")?.addEventListener("click", () => {
+  const target = lastResult?.target?.host ?? input.value;
+  const cloudflare = document.querySelector('input[name="probeSource"][value="cloudflare"]');
+  if (cloudflare) cloudflare.checked = true;
+  updateRunLabel();
+  input.value = target;
+  runLookup(target);
 });
 
 document.querySelector("#shareLink")?.addEventListener("click", async () => {
@@ -769,6 +1094,11 @@ document.querySelector("#toggleKeyVisibility")?.addEventListener("click", (event
   field.type = showing ? "password" : "text";
   event.currentTarget.textContent = showing ? "Show" : "Hide";
 });
+
+document.querySelectorAll('input[name="probeSource"]').forEach((radio) => {
+  radio.addEventListener("change", updateRunLabel);
+});
+updateRunLabel();
 
 initShodanKey();
 renderHistory();

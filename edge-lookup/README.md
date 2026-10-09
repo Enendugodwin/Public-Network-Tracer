@@ -18,6 +18,30 @@ There is no database, queue, saved search history, or permanent result cache. Re
 
 Public targets only. Private, loopback, link-local, and reserved addresses are rejected outright, and a target that resolves to a private address is refused rather than probed.
 
+## Request source
+
+A lookup can originate from one of two places, chosen in the **Request source** control:
+
+| Source | Runs where | What it can see |
+|---|---|---|
+| **Cloudflare Probe** (default) | The Worker's edge network | Live HTTP, TCP, DNS, TLS, RDAP/ASN and optional Shodan — the full result |
+| **Browser Probe** | Your own browser, via the Fetch API | Reachability and whatever CORS exposes — status, final URL, redirect flag and readable headers only |
+
+Browser Probe never routes the request through the Worker, and the Worker is never used as a silent fallback: if a browser probe fails, the dashboard says so and offers a **Retry with Cloudflare Probe** button instead.
+
+Browser Probe outcomes are explicit:
+
+| Outcome | Meaning |
+|---|---|
+| `http_response` | The browser sent the request **and** read the response (status and headers are shown) |
+| `browser_policy_blocked` | The request reached the network, but the browser hid the response (CORS / opaque response) — **not** proof the target is offline |
+| `network_failure` | The request failed at the network or browser level; the exact cause is not exposed to JavaScript |
+| `timeout` | No response within the browser probe timeout |
+
+The Fetch API cannot report the resolved IP, TLS handshake details, or every header, and a CORS error can occur even when the destination received the request. Browser Probe never fabricates a status code: a failed CORS-visible fetch is classified with a single opaque (`mode: "no-cors"`) request, so a browser probe makes at most **two** requests, sends **no** destination cookies or credentials (`credentials: "omit"`), and stores nothing.
+
+Because Browser Probe fetches arbitrary destinations, the dashboard's `connect-src` CSP (set by the Worker when it serves the page) allows any `http(s)` origin. Scripts and styles stay same-origin, and remote content is only ever rendered as inert text.
+
 ## Result and failure codes
 
 When a site is not reachable, the response carries an explicit code instead of an empty panel. The dashboard shows it on the HTTP status row, in the panel badge, and inline on closed TCP ports.

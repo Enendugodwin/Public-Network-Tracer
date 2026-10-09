@@ -39,6 +39,25 @@
             <svg aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M4 10h11m-4-4 4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </form>
+        <fieldset class="source-select">
+          <legend class="source-legend">Request source</legend>
+          <div class="source-options" role="radiogroup" aria-label="Request source">
+            <label class="source-option">
+              <input type="radio" name="probeSource" value="cloudflare" checked />
+              <span class="source-option-body">
+                <span class="source-option-title">Cloudflare Probe</span>
+                <span class="source-option-note">Runs from the Worker edge — live DNS, TCP, TLS, headers and network attribution.</span>
+              </span>
+            </label>
+            <label class="source-option">
+              <input type="radio" name="probeSource" value="browser" />
+              <span class="source-option-body">
+                <span class="source-option-title">Browser Probe</span>
+                <span class="source-option-note">Runs from this browser — reachability only; CORS limits what it can read.</span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
         <div class="search-extras">
           <div class="examples" aria-label="Example targets">
             <span>Try:</span>
@@ -90,7 +109,11 @@
             <div class="eyebrow"><span class="eyebrow-line"></span> TARGET SUMMARY</div>
             <h2 id="results-heading" class="result-target" tabindex="-1">—</h2>
             <div id="routeLine" class="route-line">
-              <span class="route-chip"><span class="route-label">Lookup source</span><span id="routeSource" class="route-value mono">—</span></span>
+              <span class="route-chip route-source"><span class="route-label">Request source</span><span class="route-value">Cloudflare probe</span></span>
+              <span class="route-arrow" aria-hidden="true">
+                <svg viewBox="0 0 24 12" fill="none"><path d="M0 6h19m-4.5-4.5L19 6l-4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="route-chip"><span class="route-label">Observed from</span><span id="routeSource" class="route-value mono">—</span></span>
               <span class="route-arrow" aria-hidden="true">
                 <svg viewBox="0 0 24 12" fill="none"><path d="M0 6h19m-4.5-4.5L19 6l-4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </span>
@@ -236,6 +259,71 @@
           <ul id="sourceList" class="source-list"></ul>
         </section>
         <p class="privacy-note"><span aria-hidden="true">i</span> Results are returned for this request only. Recent lookups live in your browser's localStorage and are never sent back. Live checks run from the checker's edge network, not from your IP.</p>
+      </section>
+
+      <section id="browserResults" class="results" hidden aria-labelledby="browser-heading">
+        <div class="results-heading-row">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span> BROWSER PROBE</div>
+            <h2 id="browser-heading" class="result-target" tabindex="-1">—</h2>
+            <div id="browserRouteLine" class="route-line">
+              <span class="route-chip route-source"><span class="route-label">Request source</span><span class="route-value">Browser probe</span></span>
+              <span class="route-arrow" aria-hidden="true">
+                <svg viewBox="0 0 24 12" fill="none"><path d="M0 6h19m-4.5-4.5L19 6l-4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="route-chip"><span class="route-label">Target URL</span><span id="browserRouteTarget" class="route-value mono">—</span></span>
+            </div>
+          </div>
+          <div class="heading-actions">
+            <p id="browserCheckedAt" class="checked-at"></p>
+            <div class="action-row">
+              <button type="button" class="ghost-button" id="browserRetryCloudflare">Retry with Cloudflare Probe</button>
+              <button type="button" class="ghost-button" id="browserCopyReport">Copy report</button>
+              <button type="button" class="ghost-button" id="browserExportJson">JSON</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="browserDiagnosis" class="diagnosis">
+          <div class="diagnosis-head">
+            <span id="browserDiagnosisBadge" class="diagnosis-badge">—</span>
+            <strong id="browserDiagnosisTitle">—</strong>
+          </div>
+          <p id="browserDiagnosisSummary" class="diagnosis-summary"></p>
+          <div id="browserDiagnosisEvidence" class="token-list diagnosis-evidence"></div>
+        </div>
+
+        <div class="summary-card">
+          <div class="summary-main">
+            <span class="metric-label">BROWSER HTTP RESULT</span>
+            <strong id="browserSumStatus" class="summary-status">—</strong>
+            <span id="browserSumNote" class="metric-note"></span>
+          </div>
+          <div class="summary-grid">
+            <div><span class="metric-label">REQUEST SOURCE</span><strong>Browser probe</strong><span class="metric-note">from your network</span></div>
+            <div><span class="metric-label">RESPONSE</span><strong id="browserSumTime">—</strong></div>
+            <div><span class="metric-label">REDIRECTED</span><strong id="browserSumRedirect">—</strong></div>
+            <div><span class="metric-label">STATUS READABLE</span><strong id="browserSumReadable">—</strong></div>
+          </div>
+        </div>
+
+        <section class="panel" aria-labelledby="browser-http-heading">
+          <div class="panel-heading"><span class="panel-icon http-icon" aria-hidden="true">01</span><div><h3 id="browser-http-heading">Browser HTTP probe</h3><p>Fetch API, sent from this browser</p></div><span id="browserHttpState" class="panel-state">—</span></div>
+          <div id="browserHttpNotice" class="notice" hidden></div>
+          <dl class="detail-list">
+            <div><dt>Request source</dt><dd>Browser</dd></div>
+            <div><dt>Target URL</dt><dd id="browserHttpTarget" class="mono">—</dd></div>
+            <div><dt>Status</dt><dd id="browserHttpStatus">—</dd></div>
+            <div><dt>Final URL</dt><dd id="browserHttpFinalUrl" class="mono">—</dd></div>
+            <div><dt>Response time</dt><dd id="browserHttpTime">—</dd></div>
+            <div><dt>Redirected</dt><dd id="browserHttpRedirect">—</dd></div>
+            <div><dt>Error category</dt><dd id="browserHttpError">—</dd></div>
+          </dl>
+          <div class="subsection"><h4>Accessible response headers</h4><div id="browserHeaders" class="token-list"><span class="muted">None accessible</span></div></div>
+          <p id="browserLimitationNote" class="micro-note"></p>
+        </section>
+
+        <p class="privacy-note"><span aria-hidden="true">i</span> Browser Probe sends the request from this browser to the destination, not through the Worker. The browser's CORS rules may hide the response even when the destination received the request, so a browser error is not proof the target is offline, and no HTTP status is invented when it cannot be read.</p>
       </section>
 
       <section id="emptyState" class="empty-state" aria-label="How it works">

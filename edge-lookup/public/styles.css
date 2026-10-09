@@ -76,6 +76,18 @@ h1 span { color: #64758f; font-weight: 400; }
 .key-row input { flex: 1 1 220px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: #263851; font-family: 'DM Mono', monospace; font-size: 11px; }
 .key-row input:focus-visible { border-color: #7894db; }
 .options-panel .body-toggle { margin-top: 10px; }
+.source-select { width: min(100%, 760px); margin: 18px auto 0; padding: 0; border: 0; text-align: left; }
+.source-legend { margin: 0 0 7px 2px; padding: 0; color: #7c899d; font-family: 'DM Mono', ui-monospace, monospace; font-size: 9px; font-weight: 500; letter-spacing: .85px; text-transform: uppercase; }
+.source-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.source-option { position: relative; display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface); cursor: pointer; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.source-option:hover { border-color: #a7b9e5; background: #f9fbff; }
+.source-option:has(input:checked) { border-color: #6f8fd6; background: linear-gradient(130deg, #fff 55%, #f2f6ff); box-shadow: 0 0 0 3px rgba(30,64,175,.08); }
+.source-option:has(input:focus-visible) { outline: 3px solid #7f9de3; outline-offset: 2px; }
+.source-option input { width: 16px; height: 16px; margin: 2px 0 0; flex: 0 0 auto; accent-color: var(--blue); cursor: pointer; }
+.source-option-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.source-option-title { color: #253650; font-size: 13px; font-weight: 600; }
+.source-option-note { color: #8090a5; font-size: 10px; line-height: 1.5; }
+.route-source .route-value { color: var(--blue-ink); }
 .form-status { min-height: 20px; margin: 8px 0 0; color: var(--red); font-size: 12px; }
 .form-status.success { color: var(--green); }
 .results { margin: 42px 0 0; }
@@ -289,6 +301,7 @@ h1 span { color: #64758f; font-weight: 400; }
 }
 @media (max-width: 520px) {
   .brand-sub { display: none; }
+  .source-options { grid-template-columns: 1fr; }
   .summary-grid { grid-template-columns: 1fr; }
   .summary-status { font-size: 22px; }
 }

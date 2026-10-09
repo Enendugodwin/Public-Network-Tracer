@@ -12,6 +12,7 @@ const appSource = readFileSync(resolve(here, "../public/app.js"), "utf8");
 function fixture(overrides: Record<string, any> = {}) {
   return {
     target: { kind: "domain", host: "example.com", url: "https://example.com/" },
+    probeSource: "cloudflare",
     lookupSource: { observedIp: "203.0.113.9", unavailableReason: null, probeOrigin: "edge, not your IP" },
     checkedAt: "2026-10-08T07:00:00.000Z",
     overview: { status: "200 OK", reachable: true, ip: "93.184.216.34", asn: "AS15133", organization: "Example Network", country: "US", responseTimeMs: 51, postureScore: 87, grade: "B" },
@@ -181,6 +182,24 @@ describe("dashboard rendering", () => {
     expect(calls.some((call) => call.startsWith("https://public-network-tracer.example.workers.dev"))).toBe(false);
   });
 
+  it("treats a private LAN address as local development too", async () => {
+    const happy = (globalThis as any).happyDOM;
+    if (!happy?.setURL) return;
+    happy.setURL("http://192.168.1.50:8787/");
+    (window as any).TRACER_API_BASE = "https://public-network-tracer.example.workers.dev";
+
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL) => {
+      calls.push(String(url));
+      return Response.json(fixture());
+    });
+
+    await submitLookup("example.com");
+    await vi.waitFor(() => expect(document.querySelector("#sumStatus")?.textContent).toContain("200"));
+    expect(calls).toContain("/api/lookup");
+    expect(calls.some((call) => call.startsWith("https://public-network-tracer.example.workers.dev"))).toBe(false);
+  });
+
   it("uses the configured base when the page is hosted on another origin", async () => {
     const happy = (globalThis as any).happyDOM;
     if (!happy?.setURL) return; // environment cannot simulate a different origin
@@ -262,5 +281,132 @@ describe("dashboard rendering", () => {
     (document.querySelector("#clearHistory") as HTMLButtonElement).click();
     expect(document.querySelectorAll("#historyList .history-chip")).toHaveLength(0);
     expect(document.querySelector("#historyBlock")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("shows the selected request source in the results", async () => {
+    vi.stubGlobal("fetch", async (url: string | URL) => {
+      if (String(url).includes("/api/lookup")) return Response.json(fixture());
+      return new Response("ip=198.51.100.4\n");
+    });
+
+    await submitLookup("example.com");
+    await vi.waitFor(() => expect(document.querySelector("#results")?.hasAttribute("hidden")).toBe(false));
+    expect(document.querySelector("#results .route-source .route-value")?.textContent).toBe("Cloudflare probe");
+  });
+
+  describe("request source: Browser Probe", () => {
+    function selectProbeSource(value: "cloudflare" | "browser") {
+      const radio = document.querySelector(`input[name="probeSource"][value="${value}"]`) as HTMLInputElement;
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    it("runs the request from the browser and never calls the Worker", async () => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        return new Response("ok", { status: 200, statusText: "OK", headers: { "content-type": "text/html", server: "example" } });
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserSumStatus")?.textContent).toContain("200"));
+
+      expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(false);
+      expect(document.querySelector("#results")?.hasAttribute("hidden")).toBe(true);
+      // The request went to the target, not to the Worker.
+      expect(calls.some((call) => call.url.includes("/api/lookup"))).toBe(false);
+      expect(calls[0]?.url).toBe("https://example.com/");
+      expect(calls[0]?.init?.mode).toBe("cors");
+      // No destination cookies or credentials are carried by default.
+      expect(calls[0]?.init?.credentials).toBe("omit");
+      expect(document.querySelector("#browserHttpStatus")?.textContent).toContain("200");
+      expect(document.querySelector("#browserHeaders")?.textContent).toContain("content-type");
+      // The selected source is always identified.
+      expect(document.querySelector("#browserResults")?.textContent).toContain("Browser probe");
+    });
+
+    it("records the final URL and redirect status when the browser can read them", async () => {
+      vi.stubGlobal("fetch", async () => {
+        const response = new Response("ok", { status: 200, headers: { "content-type": "text/plain" } });
+        Object.defineProperty(response, "url", { value: "https://example.com/final" });
+        Object.defineProperty(response, "redirected", { value: true });
+        return response;
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("example.com");
+      await vi.waitFor(() => expect(document.querySelector("#browserHttpFinalUrl")?.textContent).toContain("/final"));
+      expect(document.querySelector("#browserHttpRedirect")?.textContent).toBe("yes");
+      expect(document.querySelector("#browserSumRedirect")?.textContent).toBe("yes");
+    });
+
+    it("reports a CORS/browser-policy block as unreadable, never as an HTTP status", async () => {
+      vi.stubGlobal("fetch", async (_url: string | URL, init?: RequestInit) => {
+        if (init?.mode === "no-cors") return new Response(null, { status: 200 });
+        throw new TypeError("Failed to fetch");
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("browser_policy_blocked"));
+
+      expect(document.querySelector("#browserHttpStatus")?.textContent).toMatch(/not accessible/i);
+      expect(document.querySelector("#browserHttpStatus")?.textContent).not.toContain("200");
+      expect(document.querySelector("#browserSumStatus")?.textContent).toBe("No readable status");
+      expect(document.querySelector("#browserSumReadable")?.textContent).toBe("No");
+      expect(document.querySelector("#browserHeaders")?.textContent).toContain("opaque");
+    });
+
+    it("reports a network-level failure distinctly from a CORS block", async () => {
+      vi.stubGlobal("fetch", async () => {
+        throw new TypeError("Failed to fetch");
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("network_failure"));
+      expect(document.querySelector("#browserHttpError")?.textContent).toBe("network_failure");
+    });
+
+    it("rejects invalid URLs and non-HTTP protocols without sending a request", async () => {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string | URL) => {
+        calls.push(String(url));
+        return new Response("ok");
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("https://");
+      await vi.waitFor(() => expect(document.querySelector("#formStatus")?.textContent).toMatch(/valid URL/i));
+      expect(calls).toHaveLength(0);
+      expect(document.querySelector("#browserResults")?.hasAttribute("hidden")).toBe(true);
+
+      await submitLookup("ftp://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#formStatus")?.textContent).toMatch(/HTTP and HTTPS/i));
+      expect(calls).toHaveLength(0);
+    });
+
+    it("offers an explicit Cloudflare retry instead of falling back silently", async () => {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+        const value = String(url);
+        calls.push(value);
+        if (value.includes("/api/lookup")) return Response.json(fixture());
+        if (init?.mode === "no-cors") return new Response(null, { status: 200 });
+        throw new TypeError("Failed to fetch");
+      });
+
+      selectProbeSource("browser");
+      await submitLookup("https://example.com/");
+      await vi.waitFor(() => expect(document.querySelector("#browserDiagnosisBadge")?.textContent).toBe("browser_policy_blocked"));
+      // No silent fallback to the Worker.
+      expect(calls.some((call) => call.includes("/api/lookup"))).toBe(false);
+
+      (document.querySelector("#browserRetryCloudflare") as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(calls.some((call) => call.includes("/api/lookup"))).toBe(true));
+      expect((document.querySelector('input[name="probeSource"][value="cloudflare"]') as HTMLInputElement).checked).toBe(true);
+      await vi.waitFor(() => expect(document.querySelector("#sumStatus")?.textContent).toContain("200"));
+    });
   });
 });

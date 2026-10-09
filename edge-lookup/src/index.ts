@@ -1437,6 +1437,9 @@ async function doLookup(target: NormalizedTarget, env: Env, sourceIp: string | n
       probeOrigin: "Live HTTP and TCP checks run from the checker's edge network, not from your IP.",
     },
     checkedAt: new Date().toISOString(),
+    // The HTTP test ran from the Worker's edge network (the dashboard's default
+    // "Cloudflare Probe"). The Browser Probe runs client-side and is not seen here.
+    probeSource: "cloudflare",
     overview: {
       status: http.status === "complete" ? `${http.statusCode} ${http.statusText ?? ""}`.trim() : (http.code as string) ?? "—",
       reachable: http.status === "complete",
@@ -1471,7 +1474,11 @@ export default {
     if (url.pathname !== "/api/lookup") {
       const response = await env.ASSETS.fetch(request);
       const headers = new Headers(response.headers);
-      headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://www.cloudflare.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'");
+      // connect-src allows any http(s) origin so the Browser Probe can send its
+      // fetch straight to the chosen target. Scripts/styles stay same-origin, and
+      // remote content is only ever rendered as inert text, so this widens the
+      // outbound target list without widening the code-execution surface.
+      headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'");
       headers.set("Referrer-Policy", "no-referrer");
       headers.set("X-Content-Type-Options", "nosniff");
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });

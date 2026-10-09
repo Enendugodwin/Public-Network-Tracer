@@ -37,6 +37,13 @@ The captured body is reported as `contentType`, `bytesRead`, `truncated`, `textu
 
 Safety: the body is capped at 16 KB, never stored, and rendered in the dashboard as **inert text** (`textContent`, never `innerHTML`) so a hostile page cannot inject markup or script. Binary content types are not decoded at all.
 
+### Request source
+
+Pick where the HTTP test runs from:
+
+- **Cloudflare Probe** (default) — the Worker's edge network runs the full check set (HTTP, TCP, DNS, TLS, RDAP/ASN, optional Shodan).
+- **Browser Probe** — the request runs in your browser via the Fetch API, so you see what *your* network and browser can reach. CORS may hide the response even when the destination received the request, so the dashboard reports `http_response`, `browser_policy_blocked`, `network_failure` or `timeout` — and never invents a status code. There is no silent fallback: a failed browser probe offers an explicit **Retry with Cloudflare Probe**.
+
 Enrichment: RDAP (IP, ASN, domain registration), Team Cymru ASN/prefix/country, reverse DNS, and optional Shodan ports, services, and certificate fingerprints.
 
 Every result is then analysed, not just displayed:
